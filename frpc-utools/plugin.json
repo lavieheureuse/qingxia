@@ -1,0 +1,17 @@
+{
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "pluginSetting": {
+    "single": true,
+    "height": 700,
+    "outKill": false
+  },
+  "features": [
+    {
+      "code": "frpc",
+      "description": "iostool 电脑端：同步手机发布的 FRP 代理并运行 frpc",
+      "cmds": ["frpc", "frp", "iostool", "内网穿透", "电脑端同步"]
+    }
+  ]
+}

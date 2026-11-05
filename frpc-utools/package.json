@@ -1,0 +1,14 @@
+{
+  "name": "frpc-utools",
+  "version": "0.2.0",
+  "private": true,
+  "description": "iostool frpc 电脑端同步代理 · uTools 插件",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check.cjs",
+    "pack": "node scripts/pack.cjs"
+  },
+  "dependencies": {}
+}

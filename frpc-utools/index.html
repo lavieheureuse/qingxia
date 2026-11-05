@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light">
+  <title>iostool · frpc 电脑端</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/><circle class="dot" cx="12" cy="10" r="1.7"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1M20.5 4v5h-5"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4M20 4v5h-5M4 13a8 8 0 0 0 14.6 4M4 20v-5h5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4.5-4.5L12 15l4.5-4.5M4 16v4h16v-4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 3h10v12H3V7Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Z"/><path d="M14 3v4h4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h1.5"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3v1"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.2 4.2L19 6.5"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6.5 6.5-1.5 1.5a4.2 4.2 0 0 1-6-6l3.5-3.5a4.2 4.2 0 0 1 6 0m3.5 3.5 1.5-1.5a4.2 4.2 0 1 1 6 6L17 18.5a4.2 4.2 0 0 1-6 0"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.8-2.9 7.8-7 9.5-4.1-1.7-7-4.7-7-9.5V6l7-3Z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L11 13M10 4H4v16h16v-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L20 8l-4-4L4 16v4Z"/><path d="m14 6 4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><rect x="5" y="7" width="22" height="15" rx="2.5"/><path d="M12 27h8M16 22v5"/><path class="brand-signal" d="M12 15.5h3.2m1.6-2.6h3.2"/></svg>
+        </div>
+        <div class="brand-text"><h1>iostool</h1><p>frpc 电脑端 · 同步代理</p></div>
+      </div>
+      <span id="connection-badge" class="phase-badge is-booting" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">未配置</span><span id="connection-addr" class="phase-server"></span></span>
+    </header>
+
+    <div id="host-notice" class="notice" role="note" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <p id="host-notice-text">宿主未连接</p>
+    </div>
+
+    <main id="main" tabindex="-1">
+      <section class="surface status-card" aria-labelledby="status-heading">
+        <div class="status-head">
+          <div class="status-main">
+            <span id="status-indicator" class="status-indicator" aria-hidden="true"></span>
+            <div class="status-text">
+              <div class="status-title-row">
+                <h2 id="status-heading" class="status-title">未配置连接</h2>
+                <span id="status-version" class="chip chip-muted" hidden></span>
+              </div>
+              <p id="status-subtitle" class="status-subtitle" aria-live="polite">填写 API 地址、电脑 ID 与 Token 后开始同步。</p>
+            </div>
+          </div>
+          <div class="status-actions">
+            <button id="sync-now" class="button button-primary" type="button" aria-label="立即从服务器同步配置"><svg class="icon" aria-hidden="true"><use id="sync-icon" href="#i-sync"/></svg><span id="sync-label">立即同步</span></button>
+            <button id="toggle-frpc" class="button button-secondary" type="button"><svg class="icon" aria-hidden="true"><use id="frpc-icon" href="#i-play"/></svg><span id="frpc-label">启动 frpc</span></button>
+            <button id="restart-frpc" class="button button-secondary" type="button" aria-label="重启 frpc"><svg class="icon" aria-hidden="true"><use href="#i-restart"/></svg><span>重启</span></button>
+          </div>
+        </div>
+
+        <dl class="status-facts">
+          <div class="fact-block">
+            <dt>手机发布版本</dt>
+            <dd id="fact-remote">—</dd>
+            <span id="fact-remote-sub" class="fact-sub">尚未拉取</span>
+          </div>
+          <div class="fact-block">
+            <dt>本机已应用</dt>
+            <dd id="fact-applied">—</dd>
+            <span id="fact-applied-sub" class="fact-sub">从未同步</span>
+          </div>
+          <div class="fact-block">
+            <dt>frpc 进程</dt>
+            <dd id="fact-frpc">未运行</dd>
+            <span id="fact-frpc-sub" class="fact-sub">—</span>
+          </div>
+        </dl>
+
+        <div class="autosync-row">
+          <label class="switch-field"><input id="autosync" type="checkbox"><span class="switch-track" aria-hidden="true"></span><span class="switch-text">自动同步</span></label>
+          <label class="interval-field" for="sync-interval"><span>间隔</span><select id="sync-interval" aria-label="自动同步间隔"><option value="30">30 秒</option><option value="45">45 秒</option><option value="60">60 秒</option><option value="120">120 秒</option></select></label>
+          <span id="next-sync" class="autosync-countdown" aria-live="off">自动同步已关闭</span>
+          <span id="last-sync" class="autosync-hint">尚未同步</span>
+        </div>
+
+        <p id="status-error" class="status-error" role="alert" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="status-error-text"></span></p>
+      </section>
+
+      <details id="connection-panel" class="surface settings-panel">
+        <summary class="panel-summary">
+          <span class="summary-icon"><svg class="icon" aria-hidden="true"><use href="#i-link"/></svg></span>
+          <span class="summary-text"><span class="summary-title">连接设置</span><span id="connection-summary" class="summary-meta">未配置连接</span></span>
+          <span id="connection-flag" class="chip chip-warn" hidden>需填写</span>
+          <svg class="icon summary-chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+        </summary>
+        <form id="connection-form" class="settings-form" novalidate>
+          <div class="form-grid form-grid-connection">
+            <div class="field">
+              <label for="api-base">API 地址</label>
+              <input id="api-base" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://103.47.80.133">
+              <p class="field-error" id="api-base-error" hidden></p>
+            </div>
+            <div class="field">
+              <label for="pc-id">电脑 ID</label>
+              <input id="pc-id" type="text" autocomplete="off" spellcheck="false" maxlength="64" placeholder="pc-home">
+              <p class="field-error" id="pc-id-error" hidden></p>
+            </div>
+            <div class="field">
+              <div class="label-row">
+                <label for="pc-token">电脑 Token</label>
+                <button id="toggle-token" class="text-button inline-toggle" type="button" aria-pressed="false" aria-label="显示 token">显示</button>
+              </div>
+              <input id="pc-token" type="password" autocomplete="off" spellcheck="false" placeholder="必填，仅保存在本机">
+              <p class="field-error" id="pc-token-error" hidden></p>
+            </div>
+          </div>
+          <div class="settings-foot">
+            <button id="test-connection" class="button button-secondary" type="button"><svg class="icon" aria-hidden="true"><use href="#i-bolt"/></svg><span id="test-label">测试连接</span></button>
+            <span id="test-result" class="test-result" aria-live="polite"></span>
+          </div>
+          <p id="connection-hint" class="helper">默认服务器 http://103.47.80.133、电脑 ID pc-home；Token 由 iostool 生成，只保存在本机。</p>
+        </form>
+      </details>
+
+      <section class="surface proxies-panel" aria-labelledby="proxies-heading">
+        <div class="panel-heading">
+          <div class="panel-title">
+            <h2 id="proxies-heading">代理</h2>
+            <span id="proxy-count" class="chip chip-muted">0</span>
+            <span id="proxy-mode" class="chip chip-readonly"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg>只读</span>
+            <span id="proxy-dirty" class="chip chip-warn" hidden>未发布修改</span>
+          </div>
+          <div class="panel-tools">
+            <span id="proxy-source" class="panel-hint">来自手机发布，电脑只读</span>
+            <button id="toggle-proxies" class="icon-button collapse-button" type="button" aria-expanded="true" aria-controls="proxy-body" aria-label="折叠代理列表" title="折叠代理列表"><svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+          </div>
+        </div>
+        <div id="proxy-body">
+          <ul id="proxy-list" class="proxy-list" aria-label="代理列表"></ul>
+          <div id="proxies-empty" class="proxies-empty">
+            <span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-phone"/></svg></span>
+            <div class="empty-text"><h3>手机端还没有发布代理</h3><p>去 iostool 的「FRP 客户端」添加并发布，或直接点下方「新增代理」从电脑端发布。</p></div>
+          </div>
+          <div class="proxies-foot">
+            <div class="proxy-foot-actions">
+              <button id="add-proxy" class="button button-secondary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>新增代理</button>
+              <button id="publish-proxies" class="button button-primary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-sync"/></svg><span id="publish-label">发布修改</span><span id="publish-count" class="count" hidden></span></button>
+              <button id="restore-proxies" class="text-button" type="button" hidden>从服务器恢复</button>
+            </div>
+            <span id="proxy-foot-hint" class="panel-hint">代理由手机端编辑；这里只能查看与复制远程地址。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface config-panel" aria-labelledby="config-heading">
+        <div class="panel-heading">
+          <div class="panel-title">
+            <h2 id="config-heading">生效配置</h2>
+            <span id="config-format" class="chip chip-muted">INI</span>
+            <span id="config-version" class="chip chip-muted">v—</span>
+          </div>
+          <div class="panel-tools">
+            <button id="view-config" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg>查看配置</button>
+            <button id="verify-config" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>校验</button>
+            <button id="open-config-dir" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>打开所在目录</button>
+          </div>
+        </div>
+        <p class="path-line"><code id="config-path">尚未生成配置</code><span id="config-note" class="panel-hint">同步成功后写入</span></p>
+      </section>
+
+      <section class="surface binary-panel" aria-labelledby="binary-heading">
+        <div class="panel-heading">
+          <div class="panel-title">
+            <h2 id="binary-heading">frpc 程序</h2>
+            <span id="binary-chip" class="chip chip-warn">缺失</span>
+            <span id="binary-source" class="chip chip-muted" hidden>下载</span>
+          </div>
+          <div class="panel-tools">
+            <button id="download-binary" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>下载 frpc</button>
+            <button id="pick-binary" class="text-button" type="button">指定路径</button>
+          </div>
+        </div>
+        <p class="path-line"><code id="binary-path">未检测到 frpc</code><span id="binary-note" class="panel-hint">首次使用需下载</span></p>
+        <div id="download-box" class="download-box" hidden>
+          <div class="download-head">
+            <span id="download-title" class="download-title">正在下载 frpc</span>
+            <span id="download-percent" class="download-percent"></span>
+          </div>
+          <progress id="download-progress" max="100" aria-label="frpc 下载进度"></progress>
+          <div class="download-foot"><span id="download-detail" class="download-detail"></span><button id="download-cancel" class="text-button" type="button" hidden>取消</button></div>
+        </div>
+      </section>
+
+      <section class="surface log-panel" aria-labelledby="log-heading">
+        <div class="panel-heading log-heading">
+          <div class="panel-title log-title">
+            <h2 id="log-heading">日志</h2>
+            <div class="log-tabs" role="tablist" aria-label="日志来源">
+              <button id="tab-sync" class="log-tab is-active" role="tab" aria-selected="true" aria-controls="log-view" type="button">同步日志<span id="sync-count" class="count">0</span></button>
+              <button id="tab-frpc" class="log-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="log-view" type="button">frpc 日志<span id="frpc-count" class="count">0</span></button>
+            </div>
+          </div>
+          <div class="log-actions">
+            <label class="check-field"><input id="autoscroll" type="checkbox" checked><span>自动滚动</span></label>
+            <button id="copy-logs" class="text-button" type="button">复制</button>
+            <button id="clear-logs" class="text-button" type="button">清空</button>
+            <button id="open-log-folder" class="text-button" type="button">目录<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></button>
+          </div>
+        </div>
+        <div id="log-view" class="log-view" tabindex="0" aria-label="日志输出">
+          <ol id="log-sync-list" class="log-list"></ol>
+          <ol id="log-frpc-list" class="log-list" hidden></ol>
+          <p id="log-empty" class="log-empty">暂无同步日志。点击「立即同步」后这里会显示拉取、校验与重启过程。</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <div class="footer-links">
+        <button id="open-data-folder" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>数据目录</button>
+        <button id="open-run-folder" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>运行目录</button>
+        <button id="open-log-folder-2" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg>日志</button>
+        <button id="open-bin-folder" class="text-button" type="button"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg>程序</button>
+      </div>
+      <span id="app-version" class="footer-version">v0.2.0</span>
+    </footer>
+  </div>
+
+  <dialog id="config-dialog" aria-labelledby="config-dialog-title">
+    <div class="dialog-head">
+      <span class="dialog-icon is-accent" aria-hidden="true"><svg class="icon"><use href="#i-file"/></svg></span>
+      <div class="dialog-heading"><h2 id="config-dialog-title">生效配置</h2><p class="dialog-desc">服务器下发的完整 INI 内容，[common] 由服务器注入。</p></div>
+    </div>
+    <pre id="config-text" class="config-text" tabindex="0">正在读取配置…</pre>
+    <p id="config-dialog-note" class="dialog-note"></p>
+    <div class="dialog-actions">
+      <button id="config-copy" class="text-button dialog-secondary-link" type="button">复制</button>
+      <button id="config-close" class="button button-secondary" type="button" autofocus>关闭</button>
+    </div>
+  </dialog>
+
+  <dialog id="download-dialog" aria-labelledby="download-dialog-title">
+    <div class="dialog-head">
+      <span class="dialog-icon is-accent" aria-hidden="true"><svg class="icon"><use href="#i-download"/></svg></span>
+      <div class="dialog-heading"><h2 id="download-dialog-title">下载 frpc</h2><p class="dialog-desc">首次使用需要下载 frpc 可执行文件。frpc 需与服务端 frps 同 minor 版本（0.71.x）。</p></div>
+    </div>
+    <div class="field">
+      <label for="version-select">版本</label>
+      <select id="version-select" disabled></select>
+      <p id="version-note" class="field-hint" aria-live="polite">正在获取版本列表…</p>
+    </div>
+    <div id="download-dialog-progress" class="download-box" hidden>
+      <div class="download-head"><span id="download-dialog-title-text" class="download-title">正在下载</span><span id="download-dialog-percent" class="download-percent"></span></div>
+      <progress id="download-dialog-bar" max="100" aria-label="下载进度"></progress>
+      <div class="download-foot"><span id="download-dialog-detail" class="download-detail"></span></div>
+    </div>
+    <p id="download-dialog-error" class="form-error" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button id="download-manual" class="text-button dialog-secondary-link" type="button">手动指定 frpc.exe</button>
+      <button id="download-later" class="button button-secondary" type="button">稍后</button>
+      <button id="download-start" class="button button-primary" type="button">开始下载</button>
+    </div>
+  </dialog>
+
+  <dialog id="proxy-dialog" aria-labelledby="proxy-dialog-title">
+    <form id="proxy-form" novalidate>
+      <div class="dialog-head">
+        <span class="dialog-icon is-accent" aria-hidden="true"><svg class="icon"><use href="#i-server"/></svg></span>
+        <div class="dialog-heading"><h2 id="proxy-dialog-title">新增代理</h2><p id="proxy-dialog-desc" class="dialog-desc">保存后会发布到服务器，本机与手机端都会看到同一份代理列表。</p></div>
+      </div>
+      <div class="form-grid form-grid-dialog">
+        <div class="field">
+          <label for="proxy-name">名称</label>
+          <input id="proxy-name" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="例如 ssh" autofocus>
+          <p class="field-error" id="proxy-name-error" hidden></p>
+        </div>
+        <div class="field">
+          <label for="proxy-type">类型</label>
+          <select id="proxy-type"><option value="tcp">TCP</option></select>
+          <p class="field-hint">首版仅支持 TCP</p>
+        </div>
+        <div class="field">
+          <label for="proxy-local-ip">本地地址</label>
+          <input id="proxy-local-ip" type="text" autocomplete="off" spellcheck="false" placeholder="127.0.0.1">
+          <p class="field-error" id="proxy-local-ip-error" hidden></p>
+        </div>
+        <div class="field">
+          <label for="proxy-local-port">本地端口</label>
+          <input id="proxy-local-port" type="number" min="1" max="65535" step="1" inputmode="numeric" placeholder="22">
+          <p class="field-error" id="proxy-local-port-error" hidden></p>
+        </div>
+        <div class="field">
+          <label for="proxy-remote-port">远程端口 <span class="field-hint">服务器映射端口</span></label>
+          <input id="proxy-remote-port" type="number" min="1" max="65535" step="1" inputmode="numeric" placeholder="20022">
+          <p class="field-error" id="proxy-remote-port-error" hidden></p>
+        </div>
+        <div class="field">
+          <span class="field-label">启用</span>
+          <label class="switch-field"><input id="proxy-enabled" type="checkbox" checked><span class="switch-track" aria-hidden="true"></span><span id="proxy-enabled-text" class="switch-text">已启用</span></label>
+        </div>
+      </div>
+      <p id="proxy-form-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="proxy-cancel" class="button button-secondary" type="button">取消</button>
+        <button id="proxy-save" class="button button-primary" type="submit">保存并发布</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-desc">
+    <div class="dialog-head">
+      <span id="confirm-icon" class="dialog-icon is-accent" aria-hidden="true"><svg class="icon"><use href="#i-sync"/></svg></span>
+      <div class="dialog-heading"><h2 id="confirm-title">发布修改？</h2><p id="confirm-desc" class="dialog-desc">发布会写入服务器配置。</p></div>
+    </div>
+    <div id="confirm-detail" class="confirm-detail" hidden></div>
+    <p id="confirm-warning" class="confirm-warning" hidden></p>
+    <div class="dialog-actions">
+      <button id="confirm-cancel" class="button button-secondary" type="button" autofocus>取消</button>
+      <button id="confirm-ok" class="button button-primary" type="button">发布</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
