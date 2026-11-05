@@ -1,0 +1,29 @@
+{
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "pluginSetting": {
+    "single": true,
+    "height": 600
+  },
+  "features": [
+    {
+      "code": "download",
+      "description": "拾影 · 解析并下载抖音公开视频",
+      "cmds": ["拾影", "抖音下载", "douyin"]
+    },
+    {
+      "code": "share",
+      "description": "填入抖音分享链接，预览后手动下载",
+      "cmds": [
+        {
+          "type": "regex",
+          "label": "使用拾影解析抖音视频",
+          "match": "/https:\\/\\/(?:v\\.douyin\\.com\\/[A-Za-z0-9_-]+|(?:www\\.)?douyin\\.com\\/(?:video\\/\\d+|\\?[^\\s]*modal_id=\\d+)|(?:(?:www|m)\\.)?iesdouyin\\.com\\/share\\/video\\/\\d+)/i",
+          "minLength": 10,
+          "maxLength": 16000
+        }
+      ]
+    }
+  ]
+}

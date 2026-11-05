@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src https: data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light">
+  <title>拾影 · 抖音视频下载</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-1 1a4.24 4.24 0 0 1-6-6l4-4a4.24 4.24 0 0 1 6 0m2 2 1-1a4.24 4.24 0 1 1 6 6l-4 4a4.24 4.24 0 0 1-6 0"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.4 7M3 4v7h7m2-5v6l4 2"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1.5"/><path d="M8 5H5v16h14V5h-3M8 12h8m-8 4h5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 3h10v12H3V7Z"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L11 13M10 4H4v16h16v-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Zm0 6v5m0 3v1"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M10 5H6v8M22 5h4v8M6 21v6h8m12-6v6h-8"/><path class="brand-play" d="m13 11 9 5-9 5Z"/></svg></div>
+        <div class="brand-text"><h1>拾影</h1><p>抖音视频下载</p></div>
+      </div>
+      <span id="environment-badge" class="environment-badge"><span class="status-dot"></span><span id="environment-text">正在连接宿主</span></span>
+    </header>
+
+    <nav class="navigation" aria-label="主导航">
+      <div class="tabs" role="tablist" aria-label="功能">
+        <button id="download-tab" class="tab is-active" role="tab" aria-selected="true" aria-controls="download-panel" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>下载视频</button>
+        <button id="history-tab" class="tab" role="tab" aria-selected="false" aria-controls="history-panel" tabindex="-1" type="button"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg>下载记录<span id="history-count" class="count" hidden></span></button>
+      </div>
+      <span class="keyboard-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 解析</span>
+    </nav>
+
+    <main id="main" tabindex="-1">
+      <div id="host-notice" class="notice" role="note" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><p id="host-notice-text"></p></div>
+      <section id="download-panel" class="view" role="tabpanel" aria-labelledby="download-tab">
+        <form id="resolve-form" class="surface composer" novalidate>
+          <div class="section-heading"><label for="share-input">视频链接或分享文本 <span class="required-label">必填</span></label><button id="clear-input" class="text-button" type="button" disabled>清空</button></div>
+          <textarea id="share-input" rows="3" maxlength="20000" placeholder="粘贴抖音视频链接，或直接粘贴完整分享文本" aria-describedby="input-hint input-error" spellcheck="false"></textarea>
+          <p id="input-error" class="field-error" hidden></p>
+          <div class="composer-actions"><p id="input-hint" class="helper">先解析预览，再由你确认下载。</p><div class="button-group"><button id="paste-button" class="button button-secondary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>粘贴</button><button id="resolve-button" class="button button-primary" type="submit" disabled><span id="resolve-label">解析视频</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
+        </form>
+
+        <section class="surface preview-panel" aria-labelledby="preview-heading">
+          <div class="section-heading"><h2 id="preview-heading">视频预览</h2><span id="phase-badge" class="phase-badge">等待解析</span></div>
+          <div id="empty-preview" class="empty-preview"><span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-film"/></svg></span><div><h3>还没有待下载的视频</h3><p>解析后，这里会显示真实封面与视频信息。</p></div></div>
+          <div id="video-preview" class="video-preview" hidden>
+            <div class="cover-frame"><img id="video-cover" alt="视频封面" referrerpolicy="no-referrer" hidden><svg id="cover-fallback" class="icon" aria-hidden="true"><use href="#i-film"/></svg></div>
+            <div class="video-info"><h3 id="video-title"></h3><p id="video-author" class="video-author" hidden></p><div id="video-facts" class="video-facts"></div><p id="video-source" class="video-source" hidden></p><p id="saved-path" class="saved-path" hidden></p></div>
+            <div class="video-actions"><button id="download-button" class="button button-primary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg><span id="download-label">下载视频</span></button><button id="open-file-button" class="button button-primary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>打开视频</button><button id="reveal-button" class="button button-secondary" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>打开文件夹</button></div>
+          </div>
+          <div id="task-status" class="task-status" hidden>
+            <div class="status-line"><svg class="icon" aria-hidden="true"><use id="status-icon" href="#i-info"/></svg><p id="status-message" role="status" aria-live="polite"></p><button id="cancel-button" class="button button-stop" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span id="cancel-label">停止</span></button></div>
+            <progress id="download-progress" max="100" aria-label="下载进度" hidden></progress><p id="progress-detail" class="progress-detail" hidden></p>
+          </div>
+          <div class="login-row"><p id="login-hint">优先后台解析，独立引擎读完即退出。</p><button id="login-button" class="text-button" type="button" disabled>打开抖音 / 登录<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></button></div>
+        </section>
+        <div class="directory-row"><span class="directory-icon"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></span><div class="directory-info"><span class="directory-label">保存位置</span><p id="output-directory">正在读取下载目录…</p></div><button id="choose-directory" class="button button-secondary" type="button" disabled>更改目录</button></div>
+      </section>
+
+      <section id="history-panel" class="view" role="tabpanel" aria-labelledby="history-tab" hidden>
+        <div id="active-task-banner" class="active-task-banner" hidden><p id="active-task-text"></p><button id="return-to-download" class="text-button" type="button">返回下载<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+        <div class="history-heading"><div><h2>下载记录</h2><p>只记录已保存的视频，文件仍在本地。</p></div><button id="clear-history" class="button button-secondary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>清空记录</button></div>
+        <div id="history-empty" class="surface history-empty"><span class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg></span><h3>还没有下载记录</h3><p>成功保存的视频会出现在这里。</p><button id="start-download" class="button button-secondary" type="button">去下载视频<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+        <ol id="history-list" class="history-list" aria-label="已下载视频"></ol>
+      </section>
+    </main>
+    <footer class="app-footer"><p>请仅下载你拥有版权或已获授权的视频。</p><span id="app-version" hidden></span></footer>
+  </div>
+
+  <dialog id="clear-history-dialog" aria-labelledby="clear-dialog-heading" aria-describedby="clear-dialog-description"><form method="dialog"><span class="dialog-icon"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg></span><h2 id="clear-dialog-heading">清空下载记录？</h2><p id="clear-dialog-description">只移除这里的历史记录，不会删除已下载的视频文件。此操作不可撤销。</p><div class="dialog-actions"><button class="button button-secondary" value="cancel" autofocus>保留记录</button><button id="confirm-clear-history" class="button button-danger" value="confirm">清空记录</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

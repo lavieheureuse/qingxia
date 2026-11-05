@@ -1,0 +1,20 @@
+# 工作副本、临时验证与抓包产物
+.finesse/
+.work/
+
+# 参考仓库（他人项目，不随本仓库分发）
+douyin-downloader/
+
+# 本地下载与测试产物
+downloads/
+*.mp4
+*.webm
+
+# 依赖与构建产物
+node_modules/
+douyin-utools/dist/*.zip
+
+# 系统与编辑器
+Thumbs.db
+.DS_Store
+*.log
