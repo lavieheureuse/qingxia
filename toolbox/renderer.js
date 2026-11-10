@@ -1,0 +1,84 @@
+'use strict';
+const app = document.getElementById('app');
+const isPanel = new URLSearchParams(location.search).has('panel');
+const isPlugin = new URLSearchParams(location.search).has('plugin');
+let state, page = 'home', query = '', selected = [], candidate = null, githubDialog = false, githubInput = '', githubLoading = false, githubCandidates = [], githubError = '', pluginError = '';
+const call = (action, value) => window.toolbox.call(action, value);
+const escapeHtml = x => String(x || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const icon = p => p.icon ? `<img src="${escapeHtml(p.icon)}" alt="">` : '<span class="fallback">工</span>';
+function showDialog({ title, message, confirmText = '知道了', cancelText, danger = false }) {
+  return new Promise(resolve => {
+    const previous = document.activeElement;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'app-dialog';
+    dialog.setAttribute('aria-labelledby', 'message-title');
+    dialog.setAttribute('aria-describedby', 'message-description');
+    dialog.innerHTML = `<div class="dialog-heading"><span class="dialog-eyebrow">轻匣</span><h2 id="message-title">${escapeHtml(title)}</h2></div><p id="message-description" class="dialog-description">${escapeHtml(message)}</p><div class="dialog-actions">${cancelText ? `<button type="button" class="dialog-cancel">${escapeHtml(cancelText)}</button>` : ''}<button type="button" class="dialog-confirm ${danger ? 'danger' : 'primary'}">${escapeHtml(confirmText)}</button></div>`;
+    dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'confirm'; dialog.remove(); if (previous && previous.isConnected) previous.focus(); resolve(accepted); }, { once: true });
+    dialog.querySelector('.dialog-confirm').addEventListener('click', () => dialog.close('confirm'));
+    const cancel = dialog.querySelector('.dialog-cancel');
+    if (cancel) cancel.addEventListener('click', () => dialog.close('cancel'));
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    (cancel || dialog.querySelector('.dialog-confirm')).focus();
+  });
+}
+function showError(error) {
+  const message = error && error.message ? error.message : '操作未完成，请重试。';
+  if (isPlugin) { pluginError = message; render(); return; }
+  if (githubDialog) { githubError = message; render(); const input = document.getElementById('github-url'); if (input) input.focus(); return; }
+  if (state) render();
+  void showDialog({ title: '操作未完成', message });
+}
+function render() {
+  if (!state) return;
+  if (isPlugin) { app.innerHTML = `<header class="plugin-bar"><strong>${escapeHtml(state.name)}</strong>${pluginError ? `<span class="plugin-error" role="alert" title="${escapeHtml(pluginError)}">设置未保存</span>` : ''}<label class="plugin-mode"><input type="checkbox" data-setting="plugin-independent" ${state.independent ? 'checked' : ''}>独立窗口</label></header>`; return; }
+  const list = state.plugins;
+  if (isPanel) {
+    app.innerHTML = `<main class="popup"><header><strong>超级面板</strong><button data-action="hide" aria-label="关闭">×</button></header><div class="grid">${state.panel.map(id => list.find(p => p.dir === id)).filter(Boolean).map(p => `<button class="tile" data-action="open" data-id="${escapeHtml(p.dir)}">${icon(p)}<span>${escapeHtml(p.name)}</span></button>`).join('')}<button class="tile plus" data-action="manage"><b>＋</b><span>管理面板</span></button></div></main>`; return;
+  }
+  const header = `<header class="bar"><strong class="brand"><img src="${escapeHtml(state.appIcon)}" alt="">轻匣</strong><div><button data-action="home">我的工具</button><button data-action="panel-page">超级面板</button><button data-action="settings">设置</button></div></header>`;
+  let content = '';
+  if (page === 'home') content = `<h1>工具箱</h1><input id="search" class="search" placeholder="搜索工具" value="${escapeHtml(query)}"><div class="list">${list.filter(p => (p.name + p.description).toLowerCase().includes(query.toLowerCase())).map(p => `<div class="row">${icon(p)}<div class="info"><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.description)}</small></div><button class="subtle" data-action="remove" data-id="${escapeHtml(p.dir)}">移除</button><button class="primary" data-action="open" data-id="${escapeHtml(p.dir)}">打开</button></div>`).join('')}</div><button class="add" data-action="pick">＋　添加工具</button><button class="subtle" data-action="github">GitHub 导入</button>`;
+  if (page === 'panel') content = `<h1>超级面板</h1><p class="muted">选择要在超级面板显示的工具，使用上下按钮调整顺序。</p><div class="list">${[...selected.map(id => list.find(p => p.dir === id)).filter(Boolean), ...list.filter(p => !selected.includes(p.dir))].map(p => `<div class="row"><input type="checkbox" aria-label="加入超级面板" data-check="${escapeHtml(p.dir)}" ${selected.includes(p.dir) ? 'checked' : ''}>${icon(p)}<div class="info"><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.description)}</small></div><button data-action="up" data-id="${escapeHtml(p.dir)}">↑</button><button data-action="down" data-id="${escapeHtml(p.dir)}">↓</button></div>`).join('')}</div><button class="primary" data-action="save-panel">完成</button>`;
+  if (page === 'settings') content = `<h1>设置</h1><div class="setting"><div><strong>鼠标中键呼出超级面板</strong><small>中键可能与其他软件的操作冲突。</small></div><input type="checkbox" data-setting="middle" ${state.middle ? 'checked' : ''}></div><div class="setting"><div><strong>开机自动启动</strong><small>系统启动时自动运行工具箱。</small></div><input type="checkbox" data-setting="autostart" ${state.autoStart ? 'checked' : ''}></div><div class="setting"><div><strong>插件目录</strong><small>${escapeHtml(state.folder)}</small><small>更改时会复制已添加的插件，原文件保留。</small></div><div class="setting-actions"><button data-action="folder">查看文件夹</button><button data-action="change-folder">更改目录</button></div></div><p class="muted">版本 ${escapeHtml(state.version)}</p>`;
+  const hadModal = !!app.querySelector('.overlay');
+  let modal = candidate ? `<div class="overlay"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="candidate-title"><div class="dialog-heading"><span class="dialog-eyebrow">工具管理</span><h2 id="candidate-title">添加工具</h2></div><p class="dialog-description">确认插件信息后即可添加到工具箱。</p><div class="plugin-preview">${icon(candidate)}<div class="info"><strong>${escapeHtml(candidate.name)}</strong><small>${escapeHtml(candidate.description)}</small></div></div><p class="dialog-hint">请只添加信任的插件，插件可能访问本地文件和网络。</p><div class="dialog-actions"><button data-action="cancel">取消</button><button class="primary" data-action="add-confirm">添加工具</button></div></section></div>` : '';
+  if (githubDialog) modal = `<div class="overlay"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="github-title"><div class="dialog-heading"><span class="dialog-eyebrow">工具管理</span><h2 id="github-title">从 GitHub 添加工具</h2></div><p class="dialog-description">输入公开仓库首页链接，下载后选择插件。</p><label class="dialog-label" for="github-url">仓库链接</label><input id="github-url" class="search" placeholder="https://github.com/用户名/仓库名" value="${escapeHtml(githubInput)}" ${githubError ? 'aria-invalid="true" aria-describedby="github-error"' : ''} ${githubLoading ? 'disabled' : ''}>${githubError ? `<p id="github-error" class="dialog-error" role="alert">${escapeHtml(githubError)}</p>` : ''}<p class="dialog-hint">请只添加信任的插件，插件可能访问本地文件和网络。</p>${githubCandidates.map((p, i) => `<button class="github-result" data-action="github-select" data-id="${i}">${icon(p)}<span><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.description)}</small></span></button>`).join('')}<div class="dialog-actions"><button data-action="github-cancel" ${githubLoading ? 'disabled' : ''}>取消</button><button class="primary" data-action="github-load" ${githubLoading ? 'disabled' : ''}>${githubLoading ? '正在下载…' : '查找插件'}</button></div></section></div>`;
+  app.innerHTML = `${header}<main class="content">${content}</main><footer>轻匣　v${escapeHtml(state.version)}</footer>${modal}`;
+  if (modal && !hadModal) { const target = app.querySelector('#github-url') || app.querySelector('[data-action="cancel"]'); if (target) target.focus(); }
+}
+async function handle(action, id) {
+  if (action === 'home') page = 'home';
+  if (action === 'settings') page = 'settings';
+  if (action === 'panel-page' || action === 'manage') { page = 'panel'; selected = [...state.panel]; if (isPanel) { await call('manage'); return; } }
+  if (action === 'open') await call('open', id);
+  if (action === 'hide') await call('hide');
+  if (action === 'pick') candidate = await call('pick');
+  if (action === 'github') { githubDialog = true; githubCandidates = []; githubInput = ''; githubError = ''; }
+  if (action === 'github-cancel') { githubDialog = false; githubCandidates = []; githubError = ''; await call('github-clear'); }
+  if (action === 'github-load') { githubInput = document.getElementById('github-url').value.trim(); githubLoading = true; githubCandidates = []; githubError = ''; render(); try { await call('github-clear'); githubCandidates = await call('github', githubInput); } finally { githubLoading = false; render(); } }
+  if (action === 'github-select') { candidate = githubCandidates[Number(id)]; githubDialog = false; githubCandidates = []; }
+  if (action === 'cancel') { candidate = null; await call('github-clear'); }
+  if (action === 'add-confirm') { state = await call('add', candidate.dir); candidate = null; }
+  if (action === 'remove') { const plugin = state.plugins.find(item => item.dir === id); if (!await showDialog({ title: '移除工具？', message: `确定从工具箱移除“${plugin ? plugin.name : '该工具'}”？插件文件和数据会保留。`, confirmText: '移除工具', cancelText: '取消', danger: true })) return; state = await call('remove', id); }
+  if (action === 'save-panel') { state = await call('panel', selected); page = 'home'; }
+  if (action === 'folder') await call('folder');
+  if (action === 'change-folder') state = await call('change-folder');
+  if (action === 'up' || action === 'down') { const i = selected.indexOf(id); const j = i + (action === 'up' ? -1 : 1); if (i >= 0 && j >= 0 && j < selected.length) [selected[i], selected[j]] = [selected[j], selected[i]]; }
+  render();
+}
+app.addEventListener('click', e => { const b = e.target.closest('[data-action]'); if (b) handle(b.dataset.action, b.dataset.id).catch(showError); });
+app.addEventListener('input', e => { if (e.target.id === 'github-url') { githubInput = e.target.value; if (githubError) { githubError = ''; e.target.removeAttribute('aria-invalid'); e.target.removeAttribute('aria-describedby'); const error = document.getElementById('github-error'); if (error) error.remove(); } } if (e.target.id === 'search') { query = e.target.value; const pos = e.target.selectionStart; render(); const input = document.getElementById('search'); input.focus(); input.setSelectionRange(pos, pos); } });
+app.addEventListener('change', async e => { try { if (e.target.dataset.check) { const id = e.target.dataset.check; selected = e.target.checked ? [...selected, id] : selected.filter(x => x !== id); render(); } else if (e.target.dataset.setting) { state = await call(e.target.dataset.setting, e.target.checked); pluginError = ''; render(); } } catch (err) { showError(err); } });
+window.addEventListener('keydown', e => {
+  if (document.querySelector('dialog[open]')) return;
+  const modal = app.querySelector('.overlay [role="dialog"]');
+  if (modal && e.key === 'Escape') { e.preventDefault(); if (!githubLoading) handle(githubDialog ? 'github-cancel' : 'cancel').catch(showError); return; }
+  if (modal && e.key === 'Tab') { const controls = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled)')]; if (!controls.length) { e.preventDefault(); return; } const first = controls[0], last = controls[controls.length - 1]; if (e.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) { e.preventDefault(); first.focus(); } return; }
+  if (e.key === 'Escape' && isPanel) call('hide').catch(showError);
+});
+window.toolbox.onUpdate(s => { state = s; render(); });
+window.toolbox.onNavigate(next => { page = next; selected = [...state.panel]; render(); });
+window.toolbox.onNotice(message => showError(new Error(message)));
+call(isPlugin ? 'plugin-state' : 'state').then(s => { state = s; render(); }).catch(err => { app.textContent = '界面加载失败，请重启轻匣后重试。'; if (!isPlugin) showError(err); });

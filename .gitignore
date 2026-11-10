@@ -1,20 +1,11 @@
-# 工作副本、临时验证与抓包产物
-.finesse/
-.work/
-
-# 参考仓库（他人项目，不随本仓库分发）
-douyin-downloader/
-
-# 本地下载与测试产物
-downloads/
-*.mp4
-*.webm
-
-# 依赖与构建产物
-node_modules/
+# 依赖、构建产物和本机测试数据
+**/node_modules/
+toolbox/dist*/
+toolbox/test-user-data*/
 douyin-utools/dist/*.zip
+frpc-utools/dist/
 
-# 系统与编辑器
+# 本机临时文件
+*.log
 Thumbs.db
 .DS_Store
-*.log

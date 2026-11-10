@@ -1,0 +1,6 @@
+{
+  "main": "index.html",
+  "logo": "logo.png",
+  "pluginSetting": { "single": true, "height": 650 },
+  "features": [{ "code": "timestamp", "description": "时间戳与日期时间互相转换", "cmds": ["时间戳转换", "timestamp", "时间戳"] }]
+}

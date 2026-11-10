@@ -1,0 +1,48 @@
+{
+  "name": "personal-toolbox",
+  "version": "1.0.13",
+  "description": "轻匣工具箱",
+  "main": "main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "uiohook-napi": "1.5.5",
+    "yauzl": "2.10.0"
+  },
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "com.personal.toolbox",
+    "productName": "轻匣",
+    "asar": true,
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "plugin-preload.cjs",
+      "index.html",
+      "style.css",
+      "renderer.js",
+      "node_modules/uiohook-napi/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "bundle"
+      }
+    ],
+    "win": {
+      "icon": "resources/app-icon.ico",
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": false,
+      "include": "installer.nsh"
+    }
+  }
+}

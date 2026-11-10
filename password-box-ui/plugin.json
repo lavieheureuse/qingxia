@@ -1,0 +1,7 @@
+{
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "pluginSetting": { "single": true, "height": 700 },
+  "features": [{ "code": "password-box", "description": "本地加密保存和管理密码", "cmds": ["密码盒", "password"] }]
+}

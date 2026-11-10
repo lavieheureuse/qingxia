@@ -1,32 +1,24 @@
-# utool
+# 轻匣
 
-我的 uTools 插件集合，每个插件一个目录，各自独立、零 npm 运行时依赖。
+轻匣是一个 Windows 桌面工具箱，可以导入和管理本地插件。本仓库包含轻匣主程序、插件开发规范和示例插件。
 
-## 插件目录
+## 下载
 
-| 目录 | 插件 | 说明 |
+在 [Releases](https://github.com/lavieheureuse/qingxia/releases) 下载轻匣安装版或免安装版。源码位于 `toolbox/`。
+
+## 插件
+
+| 插件 | 目录 | 说明 |
 | --- | --- | --- |
-| [`douyin-utools/`](douyin-utools/) | 拾影 · 抖音视频下载 | 粘贴抖音公开视频链接，先预览再下载到本地。按需启动本机 Chrome / Edge 的独立引擎，读完即退出，不使用 uTools 隐藏浏览器，也不读取日常浏览器资料。 |
-| [`frpc-utools/`](frpc-utools/) | iostool · frpc 电脑端 | 与 iostool 手机端联动：拉取手机发布的 FRP 代理、校验并运行 frpc、回传状态；电脑端也可以新增/编辑代理并发布（版本 +1，手机端同步可见）。 |
+| 拾影 | [`douyin-utools/`](douyin-utools/) | 解析并下载抖音公开视频 |
+| frpc 电脑端 | [`frpc-utools/`](frpc-utools/) | 管理并同步 iostool 的 FRP 代理 |
+| 密码盒子 | [`password-box-ui/`](password-box-ui/) | 轻匣插件格式示例 |
+| 时间戳 | [`timestamp/`](timestamp/) | 时间戳与日期时间转换 |
 
-## 目录约定
+开发者请先阅读[插件开发规范](toolbox/插件开发规范.md)。规范以轻匣当前实现为准，列明支持的插件结构、字段和宿主接口边界。
 
-- 每个插件目录自带 `plugin.json`、`preload.js`、前端文件、`core/`、`tests/`、`scripts/`，可单独打包成源码 ZIP 交给 uTools 开发者工具导入。
-- 插件之间不共享运行时依赖；公共能力如有需要再单独抽取。
-- 源码包不包含登录资料、Cookie、媒体签名地址、真实下载样本或本机路径。
+## 从源码运行
 
-## 开发与检查
+需要 Node.js。进入 `toolbox/` 后运行 `npm install`，再运行 `npm start`。
 
-在某个插件目录内：
-
-```text
-npm run check     # 静态检查：manifest、分享正则、CSP、JS 语法
-npm test          # node --test
-npm run pack      # 生成源码 ZIP（不是 .upx）
-```
-
-`.upx` 仍需通过 uTools 开发者工具导出。
-
-## 许可与使用范围
-
-各插件仅用于下载自己拥有或已获授权的公开内容，不提供绕过登录、验证码、付费或 DRM 的能力。
+插件目录应保留 `plugin.json` 指定的入口、预加载脚本和资源。构建输出、依赖目录及本机测试数据不属于源码发布内容。
