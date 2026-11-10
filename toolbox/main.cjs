@@ -119,6 +119,7 @@ async function changePluginFolder(target) {
   const destination = fs.realpathSync(target);
   if (!fs.statSync(destination).isDirectory()) throw new Error('请选择有效的文件夹。');
   if (path.resolve(destination).toLowerCase() === path.resolve(pluginFolder()).toLowerCase()) return;
+  const oldFolder = pluginFolder();
   const sources = settings.plugins.map(dir => ({ original: dir, plugin: readPlugin(dir) }));
   for (const { plugin } of sources) {
     const relative = path.relative(plugin.dir, destination);
@@ -133,6 +134,13 @@ async function changePluginFolder(target) {
   const previous = settings;
   settings = { ...settings, pluginFolder: destination, plugins: settings.plugins.map(dir => mapping.get(dir)), panel: settings.panel.map(dir => mapping.get(dir) || dir), independent: settings.independent.map(dir => mapping.get(dir) || dir) };
   try { save(); } catch (error) { settings = previous; throw error; }
+  let cleanupFailed = false;
+  for (const { plugin } of sources) {
+    if (path.dirname(plugin.dir).toLowerCase() !== path.resolve(oldFolder).toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(plugin.dir))) { cleanupFailed = true; continue; }
+    try { await shell.trashItem(plugin.dir); } catch (error) { console.error('清理旧插件目录失败:', error); cleanupFailed = true; }
+  }
+  try { fs.rmdirSync(oldFolder); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) cleanupFailed = true; }
+  return cleanupFailed ? '插件已迁移到新目录，但部分旧插件文件未能清理，请检查原目录。' : '';
 }
 function plugins() { return settings.plugins.flatMap(dir => { try { return [readPlugin(dir)]; } catch (_) { return []; } }); }
 function snapshot() { return { plugins: plugins().map(displayPlugin), panel: settings.panel, middle: settings.middle, autoStart: settings.autoStart, version: app.getVersion(), folder: pluginFolder(), appIcon: require('node:url').pathToFileURL(path.join(bundle, 'app-icon.png')).href }; }
@@ -220,7 +228,7 @@ async function toolboxAction(event, action, value) {
     try {
       const result = await dialog.showOpenDialog(mainWindow, { title: '选择新的插件目录', properties: ['openDirectory', 'createDirectory'] });
       if (result.canceled || !result.filePaths.length) return snapshot();
-      await changePluginFolder(result.filePaths[0]); refresh(); return snapshot();
+      const warning = await changePluginFolder(result.filePaths[0]); refresh(); return { ...snapshot(), warning };
     }
     finally { changingFolder = false; }
   }
