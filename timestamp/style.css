@@ -1,4 +1,6 @@
 * { box-sizing: border-box; }
+header, main, section, h1, h2, p { display: block; }
+[hidden] { display: none !important; }
 :root { color-scheme: light; }
 body { margin: 0; background: #f5f7fb; color: #18243a; font: 14px "Microsoft YaHei", "Segoe UI", sans-serif; }
 button, input { font: inherit; }
