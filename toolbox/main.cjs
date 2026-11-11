@@ -4,8 +4,58 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { uIOhook } = require('uiohook-napi');
 
+const dataRoot = path.join(app.getPath('appData'), 'qingxia');
+const oldDataRoot = path.join(app.getPath('appData'), '个人工具箱');
+function migrateDataDirectory() {
+  if (fs.existsSync(dataRoot) || !fs.existsSync(oldDataRoot)) return;
+  if (fs.lstatSync(oldDataRoot).isSymbolicLink()) throw new Error('原数据目录不能是链接');
+  const config = path.join(oldDataRoot, 'toolbox.json');
+  let settings;
+  if (fs.existsSync(config)) {
+    settings = JSON.parse(fs.readFileSync(config, 'utf8').replace(/^\uFEFF/, ''));
+    const remap = value => {
+      if (typeof value !== 'string' || !path.isAbsolute(value)) return value;
+      const relative = path.relative(oldDataRoot, value);
+      return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) ? path.join(dataRoot, relative) : value;
+    };
+    if (settings.pluginFolder) settings.pluginFolder = remap(settings.pluginFolder);
+    for (const key of ['plugins', 'panel', 'independent', 'background', 'pluginStartup']) if (Array.isArray(settings[key])) settings[key] = settings[key].map(remap);
+  }
+  fs.renameSync(oldDataRoot, dataRoot);
+  try {
+    if (settings) {
+      const target = path.join(dataRoot, 'toolbox.json');
+      fs.writeFileSync(target + '.tmp', JSON.stringify(settings, null, 2));
+      fs.renameSync(target + '.tmp', target);
+    }
+  } catch (error) {
+    try { fs.renameSync(dataRoot, oldDataRoot); } catch (rollbackError) { console.error('恢复旧数据目录失败:', rollbackError); }
+    throw error;
+  }
+}
+
+if (process.argv.includes('--uninstall-ui')) {
+  app.setName('轻匣');
+  app.setPath('userData', !fs.existsSync(dataRoot) && fs.existsSync(oldDataRoot) ? oldDataRoot : dataRoot);
+  app.whenReady().then(() => {
+    Menu.setApplicationMenu(null);
+    let choice = 3;
+    const iconPath = path.join(app.isPackaged ? path.join(process.resourcesPath, 'bundle') : path.join(__dirname, 'resources'), 'app-icon.png');
+    const win = new BrowserWindow({ width: 760, height: 565, minWidth: 760, minHeight: 565, resizable: false, title: '卸载轻匣', icon: iconPath, autoHideMenuBar: true, backgroundColor: '#faf8f4', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
+    ipcMain.handle('toolbox', (event, action, value) => {
+      if (event.sender !== win.webContents) return { ok: false, message: '无权操作' };
+      if (action === 'uninstall-icon') return { ok: true, value: nativeImage.createFromPath(iconPath).toDataURL() };
+      if (action === 'uninstall-choice' && [0, 2, 3].includes(value)) { choice = value; setImmediate(() => app.exit(choice)); return { ok: true }; }
+      return { ok: false, message: '不支持的操作' };
+    });
+    win.on('closed', () => app.exit(choice));
+    win.loadFile('index.html', { query: { uninstall: '1' } });
+  }).catch(() => app.exit(3));
+} else {
+
 app.setName('轻匣');
-app.setPath('userData', path.join(app.getPath('appData'), '个人工具箱'));
+try { migrateDataDirectory(); } catch (error) { console.error('迁移数据目录失败:', error); dialog.showErrorBox('轻匣无法启动', '原有数据目录无法迁移。请先退出所有轻匣进程，检查数据目录权限后重新打开。'); app.exit(1); }
+app.setPath('userData', dataRoot);
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 else app.on('second-instance', showMain);
@@ -190,6 +240,7 @@ function openPlugin(dir, background = false) {
   if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
   const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, show: !background, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
   const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
+  view.webContents.on('did-finish-load', () => { view.webContents.insertCSS('::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#b8c8b9;border:2px solid transparent;border-radius:8px;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:#87a48c;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-corner{background:transparent}').catch(error => console.error('设置滚动条样式失败:', error)); });
   const contents = view.webContents;
   win.setMenu(null);
   windows.set(dir, win); pluginViews.set(contents.id, win);
@@ -296,6 +347,32 @@ async function toolboxAction(event, action, value) {
     return displayPlugin(readPlugin(path.dirname(r.filePaths[0])));
   }
   if (action === 'add') { const p = readPlugin(value); const base = pluginFolder(); fs.mkdirSync(base, { recursive: true }); const target = path.join(base, require('node:crypto').randomUUID()); fs.cpSync(p.dir, target, { recursive: true, errorOnExist: true, force: false, filter: source => !fs.lstatSync(source).isSymbolicLink() }); const installed = readPlugin(target); settings.plugins.push(installed.dir); save(); clearGithubStaging(); refresh(); return snapshot(); }
+  if (action === 'add-many') {
+    if (!Array.isArray(value) || !value.length || value.length > 100 || new Set(value).size !== value.length) throw new Error('请选择要添加的插件。');
+    const sources = value.map(dir => {
+      const plugin = readPlugin(dir);
+      if (![...githubStaging].some(root => { const relative = path.relative(fs.realpathSync(root), plugin.dir); return relative && !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative); })) throw new Error('插件来源已失效，请重新查找。');
+      return plugin;
+    });
+    const base = pluginFolder(), created = [], previous = settings.plugins;
+    fs.mkdirSync(base, { recursive: true });
+    try {
+      for (const plugin of sources) {
+        const target = path.join(base, require('node:crypto').randomUUID());
+        fs.mkdirSync(target);
+        created.push(target);
+        fs.cpSync(plugin.dir, target, { recursive: true, errorOnExist: true, force: false, filter: source => !fs.lstatSync(source).isSymbolicLink() });
+        readPlugin(target);
+      }
+      settings.plugins = [...previous, ...created.map(dir => fs.realpathSync(dir))];
+      save();
+    } catch (error) {
+      settings.plugins = previous;
+      for (const dir of created) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件失败:', cleanupError); } }
+      throw error;
+    }
+    clearGithubStaging(); refresh(); return snapshot();
+  }
   if (action === 'remove') { const win = windows.get(value); if (win && !win.isDestroyed()) { const contents = [...pluginViews.entries()].find(([, owner]) => owner === win); if (contents) await cleanupPlugin(require('electron').webContents.fromId(contents[0])); } settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save(); if (win && !win.isDestroyed()) win.close(); refresh(); return snapshot(); }
   if (action === 'panel') { const valid = new Set(plugins().map(p => p.dir)); settings.panel = value.filter(x => valid.has(x)); save(); refresh(); return snapshot(); }
   if (action === 'middle') { settings.middle = !!value; save(); refresh(); return snapshot(); }
@@ -316,3 +393,5 @@ ipcMain.on('host-path', (e, name) => { e.returnValue = ['userData', 'downloads',
 ipcMain.handle('host-dialog', async (e, options) => { const owner = pluginViews.get(e.sender.id) || BrowserWindow.fromWebContents(e.sender); if (owner) pluginDialogs.add(owner); try { const result = await dialog.showOpenDialog(owner, options); return result.canceled ? undefined : result.filePaths; } finally { if (owner) pluginDialogs.delete(owner); } });
 ipcMain.handle('host-open', (e, p) => shell.openPath(p));
 ipcMain.handle('host-show', (e, p) => shell.showItemInFolder(p));
+
+}

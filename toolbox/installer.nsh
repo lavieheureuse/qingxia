@@ -78,9 +78,6 @@
     FunctionEnd
 
     Function QingxiaDirectoryPage
-      ${If} ${isUpdated}
-        Abort
-      ${EndIf}
       !ifdef INSTALL_REGISTRY_KEY
         ReadRegStr $2 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
         ${StdUtils.GetParameter} $0 "D" ""

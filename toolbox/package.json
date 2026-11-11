@@ -1,6 +1,6 @@
 {
   "name": "personal-toolbox",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "轻匣工具箱",
   "main": "main.cjs",
   "private": true,
@@ -42,6 +42,7 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": false,
+      "script": "overlay-installer.nsi",
       "include": "installer.nsh"
     }
   }
