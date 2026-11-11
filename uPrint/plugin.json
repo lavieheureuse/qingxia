@@ -17,6 +17,7 @@
   "features": [
     {
       "code": "uprint-main",
+      "description": "批量打印 PDF、Word 和图片，支持纸张、边距、方向、份数及页码范围设置",
       "explain": "批量打印 PDF / Word（.docx）/ 图片：纸张大小 / 页边距 / 页面方向 / 份数",
       "icon": "assets/logo.png",
       "platform": [
