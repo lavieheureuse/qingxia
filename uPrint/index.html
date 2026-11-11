@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>uPrint 批量打印</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 顶栏 -->
+    <div class="topbar">
+      <img class="logo" src="assets/logo.png" alt="uPrint">
+      <div class="title">uPrint 批量打印<small>PDF / 图片 批量静默打印</small></div>
+      <div class="spacer"></div>
+      <span class="engine-badge" id="engineBadge">引擎检测中…</span>
+      <button class="icon-btn" id="btnToggleSettings" title="显示/隐藏设置面板">⚙</button>
+    </div>
+
+    <!-- 工具行 -->
+    <div class="toolbar">
+      <button class="btn primary" id="btnAdd">＋ 添加文件</button>
+      <button class="btn" id="btnAddFolder">📁 添加文件夹</button>
+      <button class="btn danger-ghost" id="btnRemove">移除选中</button>
+      <button class="btn danger-ghost" id="btnClear">清空列表</button>
+      <button class="btn" id="btnSelectAll">全选</button>
+      <div class="search-box">
+        <span>🔍</span>
+        <input type="text" id="searchInput" placeholder="筛选文件名…">
+      </div>
+    </div>
+
+    <!-- 主体 -->
+    <div class="main">
+      <!-- 文件列表 -->
+      <div class="file-panel" id="filePanel">
+        <div class="file-list" id="fileList">
+          <div class="empty" id="emptyTip">
+            <div class="big">🖨️</div>
+            <div>还没有添加文件</div>
+            <div class="drop-hint">点击「添加文件」，或直接把 PDF / Word（.docx）/ 图片拖到这里<br>也可以在 uTools 主框选中文件后进入插件</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置面板 -->
+      <div class="settings" id="settingsPanel">
+        <!-- 纸张预览 -->
+        <div class="set-group">
+          <label class="set-label">纸张预览</label>
+          <div class="preview-wrap">
+            <div class="paper-preview portrait" id="paperPreview">
+              <div class="margin-box" id="marginBox"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 纸张大小 -->
+        <div class="set-group">
+          <label class="set-label">纸张大小</label>
+          <div class="paper-tags" id="paperTags">
+            <div class="paper-tag active" data-size="A4">A4</div>
+            <div class="paper-tag" data-size="A3">A3</div>
+            <div class="paper-tag" data-size="A5">A5</div>
+            <div class="paper-tag" data-size="B5">B5</div>
+            <div class="paper-tag" data-size="Letter">Letter</div>
+            <div class="paper-tag" data-size="custom">自定义</div>
+          </div>
+          <div class="custom-size" id="customSizeBox" style="display:none;">
+            宽 <input type="number" id="customW" value="210" min="50" max="1000"> ×
+            高 <input type="number" id="customH" value="297" min="50" max="1500"> mm
+          </div>
+        </div>
+
+        <!-- 页边距 -->
+        <div class="set-group">
+          <label class="set-label">页边距（毫米）</label>
+          <div class="margin-grid">
+            <div class="margin-item">上 <input type="number" id="mgTop" value="15" min="0" max="100"></div>
+            <div class="margin-item">下 <input type="number" id="mgBottom" value="15" min="0" max="100"></div>
+            <div class="margin-item">左 <input type="number" id="mgLeft" value="20" min="0" max="100"></div>
+            <div class="margin-item">右 <input type="number" id="mgRight" value="20" min="0" max="100"></div>
+          </div>
+          <div class="hint-line" id="marginHint"></div>
+        </div>
+
+        <!-- 页面方向 -->
+        <div class="set-group">
+          <label class="set-label">页面方向</label>
+          <div class="orient-row">
+            <div class="orient-card active" data-orient="portrait">
+              <div class="pg p"></div><span>纵向</span>
+            </div>
+            <div class="orient-card" data-orient="landscape">
+              <div class="pg l"></div><span>横向</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 打印机 -->
+        <div class="set-group">
+          <label class="set-label">打印机</label>
+          <select id="printerSelect" style="width:100%;">
+            <option value="">系统默认打印机</option>
+          </select>
+          <button class="btn" id="btnRefreshPrinters" style="margin-top:6px; width:100%;">刷新打印机列表</button>
+        </div>
+
+        <!-- 份数 -->
+        <div class="set-group">
+          <label class="set-label">打印份数</label>
+          <div class="inline-between">
+            <div class="stepper">
+              <button id="copyMinus">−</button>
+              <input type="number" id="copies" value="1" min="1" max="99">
+              <button id="copyPlus">＋</button>
+            </div>
+            <label style="font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:6px;">
+              <span class="switch"><input type="checkbox" id="chkColor" checked><span class="slider"></span></span>彩色打印
+            </label>
+          </div>
+        </div>
+
+        <!-- 页码范围 -->
+        <div class="set-group">
+          <label class="set-label">页码范围（仅 PDF）</label>
+          <div class="range-row">
+            <label><input type="radio" name="rangeMode" value="all" checked> 全部</label>
+            <label><input type="radio" name="rangeMode" value="custom"> 指定</label>
+            <input type="text" id="rangeInput" placeholder="如 1-3,5,8" disabled>
+          </div>
+          <div class="hint-line">图片文件此项忽略；指定页码按 1 开始计数。</div>
+        </div>
+
+        <!-- 缩放 -->
+        <div class="set-group">
+          <label class="set-label">缩放比例 <span id="scaleVal">100%</span></label>
+          <input type="range" id="scaleRange" min="50" max="150" value="100" style="width:100%;">
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部 -->
+    <div class="bottombar">
+      <span class="count" id="countText">共 0 个文件，已选 0 个</span>
+      <div class="progress-bar" id="progressBar"><i></i></div>
+      <span class="progress-text" id="progressText"></span>
+      <div class="spacer"></div>
+      <button class="btn" id="btnPreview">预览设置效果</button>
+      <button class="btn success" id="btnPrint">🖨️ 一键批量打印</button>
+    </div>
+  </div>
+
+  <input type="file" id="filePicker" multiple accept=".pdf,.docx,.png,.jpg,.jpeg,.bmp,.gif,.webp,.tif,.tiff" style="display:none;">
+  <input type="file" id="folderPicker" webkitdirectory directory multiple style="display:none;">
+  <div class="preview-modal" id="previewModal" hidden>
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="preview-head"><strong id="previewTitle">PDF 页面预览</strong><button class="icon-btn" id="btnClosePreview" title="关闭">✕</button></div>
+      <div class="preview-body"><div class="preview-loading" id="previewLoading">正在生成预览…</div><div class="preview-sheet" id="previewSheet" hidden><div class="preview-print-area" id="previewPrintArea"><img id="previewImage" alt="打印预览"></div></div></div>
+      <div class="preview-scale-hint" id="previewScaleHint"></div>
+      <div class="preview-foot"><button class="btn" id="btnPreviewPrevFile" title="上一个文件（↑）">上一个文件</button><button class="btn" id="btnPreviewPrev" title="上一页（←）">上一页</button><span id="previewPageText">第 1 页</span><button class="btn" id="btnPreviewNext" title="下一页（→）">下一页</button><button class="btn" id="btnPreviewNextFile" title="下一个文件（↓）">下一个文件</button></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

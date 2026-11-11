@@ -1,0 +1,40 @@
+{
+  "pluginName": "uPrint 批量打印",
+  "version": "1.1.0",
+  "description": "批量打印 PDF / Word（.docx）/ 图片，支持纸张大小、页边距、页面方向、份数、页码范围等设置",
+  "author": "博哥",
+  "homepage": "https://u.tools",
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "assets/logo.png",
+  "platform": [
+    "win32"
+  ],
+  "pluginSetting": {
+    "single": true,
+    "height": 0
+  },
+  "features": [
+    {
+      "code": "uprint-main",
+      "explain": "批量打印 PDF / Word（.docx）/ 图片：纸张大小 / 页边距 / 页面方向 / 份数",
+      "icon": "assets/logo.png",
+      "platform": [
+        "win32"
+      ],
+      "cmds": [
+        "uPrint",
+        "uprint",
+        "批量打印",
+        "打印",
+        "打印设置",
+        {
+          "type": "files",
+          "label": "批量打印选中的文件",
+          "fileType": "file",
+          "match": "/\\.(pdf|docx|png|jpe?g|bmp|gif|webp|tiff?)$/i"
+        }
+      ]
+    }
+  ]
+}
