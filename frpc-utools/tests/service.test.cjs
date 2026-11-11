@@ -263,6 +263,37 @@ test('bootstrap() exposes the SPEC-SYNC State shape and starts unconfigured', as
   assert.ok(fs.existsSync(path.join(dataDir, 'logs', 'sync.log')), 'bootstrap 应写同步日志');
 });
 
+test('默认 frpc 路径跟随插件目录，兼容旧下载路径和自定义路径', async (t) => {
+  const dataDir = tempDir(t);
+  const binDir = path.join(tempDir(t), 'bin');
+  const legacy = path.join(dataDir, 'bin', 'frpc.exe');
+  const current = path.join(binDir, 'frpc.exe');
+  const custom = path.join(dataDir, 'custom.exe');
+  const store = createStore(dataDir);
+  const settings = store.read();
+  const internals = { detectVersion: async () => '0.71.1' };
+  const boot = async () => {
+    const service = createService({ dataDir, binDir, internals });
+    const state = await service.bootstrap();
+    service.dispose();
+    return state.frpc.binary;
+  };
+  assert.equal((await boot()).path, current);
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, 'old');
+  settings.frpc = { path: legacy, version: '0.71.1', source: 'downloaded' };
+  store.write(settings);
+  assert.equal((await boot()).path, legacy);
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(current, 'new');
+  assert.equal((await boot()).path, current);
+  fs.writeFileSync(custom, 'custom');
+  const saved = store.read();
+  saved.frpc = { path: custom, version: '0.71.1', source: 'custom' };
+  store.write(saved);
+  assert.equal((await boot()).path, custom);
+});
+
 test('saveConnection() validates, persists obfuscated token and updates phase', async (t) => {
   const { service, dataDir } = setup(t);
   await service.bootstrap();

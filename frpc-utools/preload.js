@@ -49,6 +49,7 @@
     const dataDir = path.join(hostPath('userData', path.join(os.homedir(), '.config')), 'frpc-utools');
     service = createService({
       dataDir,
+      binDir: path.join(__dirname, 'bin'),
       host,
       appVersion,
       platform: process.platform,

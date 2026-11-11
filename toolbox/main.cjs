@@ -256,6 +256,12 @@ function showPanel() {
   const win = windowForPanel(); const point = screen.getCursorScreenPoint(); const area = screen.getDisplayNearestPoint(point).workArea; const [w, h] = win.getSize();
   win.setPosition(Math.max(area.x, Math.min(point.x, area.x + area.width - w)), Math.max(area.y, Math.min(point.y, area.y + area.height - h))); win.show(); win.focus();
 }
+function handleGlobalMouseDown(event) {
+  if (event.button === 3 && settings.middle) { showPanel(); return; }
+  if (!panelWindow || panelWindow.isDestroyed() || !panelWindow.isVisible()) return;
+  const point = screen.getCursorScreenPoint(), bounds = panelWindow.getBounds();
+  if (point.x < bounds.x || point.y < bounds.y || point.x >= bounds.x + bounds.width || point.y >= bounds.y + bounds.height) panelWindow.hide();
+}
 function openPlugin(dir, background = false) {
   const plugin = plugins().find(p => p.dir === dir); if (!plugin) throw new Error('工具不存在');
   if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
@@ -300,7 +306,7 @@ app.whenReady().then(async () => {
     if (!settings.plugins.includes(dir)) continue;
     try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', '有后台插件启动失败，请检查插件文件是否完整。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
   }
-  try { uIOhook.on('mousedown', e => { if (e.button === 3 && settings.middle) showPanel(); }); uIOhook.start(); } catch (error) { console.error('鼠标快捷面板不可用:', error); const notice = () => mainWindow.webContents.send('notice', '鼠标中键快捷面板暂时不可用，请重启工具箱后重试。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
+  try { uIOhook.on('mousedown', handleGlobalMouseDown); uIOhook.start(); } catch (error) { console.error('鼠标快捷面板不可用:', error); const notice = () => mainWindow.webContents.send('notice', '鼠标中键快捷面板暂时不可用，请重启工具箱后重试。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
 });
 app.on('before-quit', event => {
   if (quitReady) { try { uIOhook.stop(); } catch (_) {} return; }

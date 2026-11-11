@@ -159,7 +159,7 @@ function createService(options) {
   const dirs = {
     data: dataDir,
     run: path.join(dataDir, 'run'),
-    bin: path.join(dataDir, 'bin'),
+    bin: typeof opts.binDir === 'string' && opts.binDir.trim() ? path.resolve(opts.binDir) : path.join(dataDir, 'bin'),
     logs: path.join(dataDir, 'logs'),
   };
   const settingsPath = store.settingsPath;
@@ -406,12 +406,11 @@ function createService(options) {
   async function initBinary() {
     const configured = settings.frpc && settings.frpc.path ? String(settings.frpc.path).trim() : '';
     const candidates = [];
-    if (configured) {
-      candidates.push({ path: configured, source: settings.frpc.source === 'custom' ? 'custom' : 'downloaded' });
-    }
     const downloaded = path.join(dirs.bin, 'frpc.exe');
-    if (!configured || path.resolve(configured) !== path.resolve(downloaded)) {
-      candidates.push({ path: downloaded, source: 'downloaded' });
+    if (configured && settings.frpc.source === 'custom') candidates.push({ path: configured, source: 'custom' });
+    candidates.push({ path: downloaded, source: 'downloaded' });
+    if (configured && settings.frpc.source !== 'custom' && path.resolve(configured) !== path.resolve(downloaded)) {
+      candidates.push({ path: configured, source: 'downloaded' });
     }
     let found = null;
     for (const candidate of candidates) {
@@ -438,9 +437,9 @@ function createService(options) {
     } else {
       binaryInfo = {
         status: 'missing',
-        path: configured || downloaded,
+        path: configured && settings.frpc.source === 'custom' ? configured : downloaded,
         version: '',
-        source: configured ? 'custom' : 'downloaded',
+        source: configured && settings.frpc.source === 'custom' ? 'custom' : 'downloaded',
         download: binaryInfo.download,
       };
     }

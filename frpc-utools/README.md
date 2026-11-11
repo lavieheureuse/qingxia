@@ -65,8 +65,9 @@ run/frpc.toml.version  已应用版本号
 run/frpc.pid           运行中的 frpc 进程信息（用于窗口重开后接管）
 run/frpc.log           frpc 输出
 logs/sync.log          插件的同步日志
-bin/frpc.exe           下载的 frpc
 ```
+
+下载的 frpc 默认位于插件目录的 `bin/frpc.exe`；已有的旧下载路径和手动指定路径仍可使用。
 
 ## 安全
 
