@@ -25,7 +25,7 @@
 
   // 与 core/service.cjs 约定的方法白名单（SPEC-SYNC 第 6 节）。
   const METHODS = [
-    'saveConnection', 'testConnection', 'syncNow', 'setAutoSync',
+    'saveConnection', 'testConnection', 'syncNow', 'setAutoSync', 'setStartOnLaunch',
     'publishProxies',
     'startFrpc', 'stopFrpc', 'restartFrpc',
     'getConfigText', 'verifyConfig',
@@ -99,7 +99,14 @@
     host.onPluginEnter(() => { expandHeight(700); });
   }
 
-  // 关闭插件窗口不杀 frpc：隧道按设计继续在后台运行，重开窗口由 pid 文件接管。
+  if (host && typeof host.onPluginExit === 'function') {
+    host.onPluginExit(() => service ? service.shutdown() : undefined);
+  }
+  if (host && typeof host.onPluginExitCancelled === 'function') {
+    host.onPluginExitCancelled(() => { if (service) service.resumeAfterCancelledExit(); });
+  }
+
+  // 兼容没有退出回调的旧宿主；独立进程需在旧宿主中手动停止。
   window.addEventListener('beforeunload', () => {
     try { if (service && typeof service.dispose === 'function') service.dispose(); } catch (_) { /* 忽略 */ }
   }, { once: true });

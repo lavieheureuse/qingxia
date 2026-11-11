@@ -13,6 +13,7 @@
   const coverDomains = ['douyinpic.com', 'douyinstatic.com', 'ibytedtos.com', 'byteimg.com', 'douyin.com', 'pstatp.com'];
   const state = { initialized: false, host: false, browser: false, phase: 'idle', video: null, result: null, history: [], directory: '', message: '', progress: null, cancelling: false, action: null, resolvedInput: '', sequence: 0 };
   let toastTimer;
+  let batch = null;
 
   function text(value, max = 1000) {
     return typeof value === 'string' ? value.slice(0, max) : '';
@@ -20,7 +21,7 @@
   function messageFrom(error, fallback = '操作未完成，请稍后重试。') {
     return text(error && error.message, 500) || fallback;
   }
-  function busy() { return state.phase === 'resolving' || state.phase === 'waiting' || state.phase === 'downloading'; }
+  function busy() { return !!batch || state.phase === 'resolving' || state.phase === 'waiting' || state.phase === 'downloading'; }
   function canCall(name) { return state.host && bridge && typeof bridge[name] === 'function'; }
   function safeCover(value) {
     try {
@@ -153,9 +154,10 @@
     $('paste-button').disabled = !canCall('readClipboard') || running || state.action === 'paste';
     $('paste-button').title = state.host ? '从剪贴板填入分享文本，不会自动解析' : '请在 uTools 中使用剪贴板';
     $('resolve-button').disabled = !canCall('resolve') || running || !$('share-input').value.trim();
+    $('batch-button').disabled = !canCall('resolve') || !canCall('download') || running || !$('share-input').value.trim();
     $('resolve-button').title = !state.host ? '请在 uTools 中解析视频' : !$('share-input').value.trim() ? '先填入视频链接或分享文本' : running ? '当前任务结束后可重新解析' : '解析并预览，不会自动下载';
     $('resolve-label').textContent = state.phase === 'resolving' || state.phase === 'waiting' ? '解析中…' : state.phase === 'error' ? '重新解析' : '解析视频';
-    $('input-hint').textContent = !designPreview && !state.host && state.initialized ? '预览模式：解析与下载需要 uTools 宿主。' : running ? '任务进行中。切换记录页不会中断。' : '先解析预览，再由你确认下载。';
+    $('input-hint').textContent = !designPreview && !state.host && state.initialized ? '预览模式：解析与下载需要 uTools 宿主。' : running ? '任务进行中。切换记录页不会中断。' : '单条可预览；多个链接可批量下载。';
     $('phase-badge').textContent = labels[state.phase] || labels.idle;
     $('phase-badge').className = 'phase-badge';
     if (running) $('phase-badge').classList.add('is-busy');
@@ -265,6 +267,8 @@
       state.result = null;
       state.message = '';
       state.progress = null;
+      $('batch-results').hidden = true;
+      $('batch-results').replaceChildren();
     }
     render();
   }
@@ -318,8 +322,48 @@
       setError(messageFrom(error, '下载未完成，可以重新下载。'));
     }
   }
+  async function downloadBatch() {
+    if (!canCall('resolve') || !canCall('download') || busy()) return;
+    const links = [...new Set(($('share-input').value.match(/https?:\/\/[^\s<>"'`]+/gi) || []).map(link => link.replace(/[，。！？、；：）》】」』“”‘’.,!;:)\]}]+$/u, '')))];
+    if (!links.length || links.length > 100) { setInputError('请输入 1 至 100 个带 http 或 https 的作品链接。'); return; }
+    setInputError('');
+    batch = { stopped: false };
+    state.video = null; state.result = null; state.progress = null;
+    const list = $('batch-results');
+    list.replaceChildren(); list.hidden = false;
+    let success = 0;
+    for (let i = 0; i < links.length && !batch.stopped; i += 1) {
+      const row = document.createElement('li');
+      row.textContent = `${i + 1}. 正在解析：${links[i]}`;
+      list.append(row);
+      state.phase = 'resolving'; state.message = `正在处理第 ${i + 1} / ${links.length} 个视频。`; render();
+      try {
+        const video = await bridge.resolve(links[i]);
+        if (batch.stopped) { row.textContent = `${i + 1}. 已停止：${links[i]}`; break; }
+        if (!video || !video.id) throw new Error('没有取得视频信息。');
+        row.textContent = `${i + 1}. 正在下载：${text(video.title) || links[i]}`;
+        state.phase = 'downloading'; render();
+        const result = await bridge.download(video.id);
+        if (!result || !text(result.path, 2000)) throw new Error('未返回保存路径，请查看下载记录。');
+        success += 1;
+        row.textContent = `${i + 1}. 已保存：${text(video.title) || links[i]} — ${result.path}${result.warning ? ` ${result.warning}` : ''}`;
+      } catch (error) {
+        row.textContent = `${i + 1}. ${batch.stopped ? '已停止' : '失败'}：${links[i]} — ${messageFrom(error)}`;
+      }
+    }
+    const stopped = batch.stopped;
+    batch = null; state.cancelling = false; state.progress = null;
+    state.phase = stopped ? 'cancelled' : success === links.length ? 'complete' : 'error';
+    state.message = `${stopped ? '已停止。' : '批量任务结束。'}成功保存 ${success} / ${links.length} 个视频，详情见下方。`;
+    render(); refreshHistory();
+  }
   async function cancelTask() {
     if (!canCall('cancel') || !busy() || state.cancelling) return;
+    if (batch) {
+      batch.stopped = true; state.cancelling = true; render();
+      try { await bridge.cancel(); } catch (error) { notify(messageFrom(error, '停止任务失败，请重试。')); state.cancelling = false; render(); }
+      return;
+    }
     const sequence = state.sequence;
     state.cancelling = true;
     render();
@@ -347,6 +391,10 @@
   }
   function handleState(event, authoritative = false) {
     if (!event || typeof event !== 'object' || !phases.has(event.phase)) return;
+    if (batch) {
+      if (event.phase === 'downloading') { state.progress = event.progress || null; render(); }
+      return;
+    }
     // Cancel's final snapshot is authoritative; ordinary late events must not
     // revive a task whose input has been replaced or whose stop was confirmed.
     if (!authoritative && (state.phase === 'idle' || (state.phase === 'cancelled' && event.phase !== 'cancelled'))) return;
@@ -365,6 +413,7 @@
   $('share-input').addEventListener('blur', () => { if (state.host && !$('share-input').value.trim() && $('share-input').value) setInputError('文本中没有视频链接，请重新粘贴分享内容。'); });
   $('clear-input').addEventListener('click', () => { $('share-input').value = ''; inputChanged(); $('share-input').focus(); });
   $('download-button').addEventListener('click', downloadVideo);
+  $('batch-button').addEventListener('click', downloadBatch);
   $('cancel-button').addEventListener('click', cancelTask);
   $('download-tab').addEventListener('click', () => switchTab('download'));
   $('history-tab').addEventListener('click', () => switchTab('history'));

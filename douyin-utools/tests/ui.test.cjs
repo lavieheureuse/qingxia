@@ -276,3 +276,30 @@ test('JSON titles and source strings remain text; untrusted cover domains are re
   assert.equal(ui.node('video-cover').hidden, true);
   assert.equal(ui.node('cover-fallback').hidden, false);
 });
+
+test('batch downloads unique links in order and continues after a failure', async () => {
+  const ui = await createUI({ bridge: { resolve: async link => {
+    if (link.includes('/bad')) throw new Error('解析失败');
+    return { ...video, title: link };
+  } } });
+  ui.node('share-input').value = 'https://v.douyin.com/one/\nhttps://v.douyin.com/bad\nhttps://v.douyin.com/one/\nhttps://v.douyin.com/two/';
+  await ui.node('batch-button').emit('click');
+  assert.equal(ui.calls.resolve.length, 3);
+  assert.equal(ui.calls.download.length, 2);
+  assert.match(ui.node('batch-results').children[1].textContent, /失败.*解析失败/);
+  assert.match(ui.node('status-message').textContent, /成功保存 2 \/ 3/);
+});
+
+test('stopping a batch prevents the next download', async () => {
+  const resolving = deferred();
+  const ui = await createUI({ bridge: { resolve: () => resolving.promise } });
+  ui.node('share-input').value = 'https://v.douyin.com/one/\nhttps://v.douyin.com/two/';
+  const pending = ui.node('batch-button').emit('click');
+  await flush();
+  await ui.node('cancel-button').emit('click');
+  resolving.resolve({ ...video });
+  await pending;
+  assert.equal(ui.calls.resolve.length, 1);
+  assert.equal(ui.calls.download.length, 0);
+  assert.match(ui.node('status-message').textContent, /已停止/);
+});

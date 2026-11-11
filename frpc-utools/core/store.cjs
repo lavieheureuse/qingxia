@@ -95,7 +95,7 @@ function defaultSettings() {
     version: SETTINGS_VERSION,
     connection: { apiBase: DEFAULT_API_BASE, pcId: DEFAULT_PC_ID, pcToken: '' },
     frpc: { path: '', version: '', source: 'downloaded' },
-    autoSync: { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC },
+    autoSync: { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC, startOnLaunch: false },
     ui: { autoScroll: true },
   };
 }
@@ -128,6 +128,7 @@ function normalizeSettings(raw) {
     autoSync: {
       enabled: asBoolean(autoSync.enabled, false),
       intervalSec: normalizeInterval(autoSync.intervalSec),
+      startOnLaunch: asBoolean(autoSync.startOnLaunch, false),
     },
     ui: { autoScroll: !isPlainObject(source.ui) || source.ui.autoScroll !== false },
   };

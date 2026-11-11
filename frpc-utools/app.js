@@ -58,7 +58,7 @@
         logHints: { loggedIn: false, startedProxies: [], lastError: null },
         binary: { status: 'missing', path: '', version: '', source: 'downloaded', download: null },
       },
-      autoSync: { enabled: false, intervalSec: 45, nextAt: null },
+      autoSync: { enabled: false, intervalSec: 45, startOnLaunch: false, nextAt: null },
       lastSync: { at: null, ok: null, action: null, version: null, error: null },
       lastError: null,
     };
@@ -161,6 +161,7 @@
       autoSync: {
         enabled: bool(autoSync.enabled, false),
         intervalSec: INTERVALS.includes(Number(autoSync.intervalSec)) ? Number(autoSync.intervalSec) : 45,
+        startOnLaunch: bool(autoSync.startOnLaunch, false),
         nextAt: intOrNull(autoSync.nextAt),
       },
       lastSync: {
@@ -535,6 +536,9 @@
     const auto = $('autosync');
     syncChecked(auto, state.autoSync.enabled);
     auto.disabled = !ui.host || !configured() || ui.action !== null;
+    const startup = $('start-on-launch');
+    syncChecked(startup, state.autoSync.startOnLaunch);
+    startup.disabled = !ui.host || ui.action !== null;
     const interval = $('sync-interval');
     syncValue(interval, String(state.autoSync.intervalSec));
     interval.disabled = !ui.host || !configured() || ui.action !== null;
@@ -1598,6 +1602,13 @@
       const result = await callBridge('setAutoSync', [enabled, interval], { action: 'setAutoSync', fallback: '自动同步设置失败。' });
       if (result.ok) notify(enabled ? `已开启自动同步（${interval} 秒）` : '已关闭自动同步');
       else syncChecked($('autosync'), ui.state.autoSync.enabled);
+    });
+    $('start-on-launch').addEventListener('change', async () => {
+      if (locked()) return;
+      const enabled = $('start-on-launch').checked;
+      const result = await callBridge('setStartOnLaunch', [enabled], { action: 'setStartOnLaunch', fallback: '启动时自动同步设置失败。' });
+      if (result.ok) notify(enabled ? '已开启启动时自动同步' : '已关闭启动时自动同步');
+      else syncChecked($('start-on-launch'), ui.state.autoSync.startOnLaunch);
     });
     $('sync-interval').addEventListener('change', async () => {
       if (locked()) return;

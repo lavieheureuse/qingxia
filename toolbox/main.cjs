@@ -12,7 +12,7 @@ else app.on('second-instance', showMain);
 const bundle = app.isPackaged ? path.join(process.resourcesPath, 'bundle') : path.join(__dirname, 'resources');
 const data = app.getPath('userData');
 const settingsFile = path.join(data, 'toolbox.json');
-let settings = { version: 1, plugins: [], panel: [], independent: [], middle: true, autoStart: false };
+let settings = { version: 1, plugins: [], panel: [], independent: [], background: [], pluginStartup: [], middle: true, autoStart: false };
 try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) }; } catch (_) {}
 function save() { fs.mkdirSync(data, { recursive: true }); const tmp = settingsFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(settings, null, 2)); fs.renameSync(tmp, settingsFile); }
 function readPlugin(dir) {
@@ -111,11 +111,40 @@ let mainWindow, panelWindow, tray;
 function showMain() { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } }
 const windows = new Map();
 const pluginViews = new Map();
+const pluginMenus = new Map();
 const pluginDialogs = new Set();
+const pluginOperations = new Set();
+const pluginExitHandlers = new Set();
+const pluginExitPending = new Map();
+const pluginExitRunning = new Map();
+let quitReady = false, quitPending = false;
+function cleanupPlugin(contents) {
+  if (!pluginExitHandlers.has(contents.id)) return Promise.resolve();
+  if (pluginExitRunning.has(contents.id)) return pluginExitRunning.get(contents.id);
+  const promise = new Promise((resolve, reject) => {
+    if (contents.isDestroyed()) { reject(new Error('插件页面已关闭，无法确认后台任务是否停止。')); return; }
+    const id = require('node:crypto').randomUUID();
+    const finish = error => { clearTimeout(timer); contents.removeListener('destroyed', destroyed); pluginExitPending.delete(id); if (error) reject(error); else resolve(); };
+    const destroyed = () => finish(new Error('插件页面意外关闭，无法确认后台任务是否停止。'));
+    const timer = setTimeout(() => finish(new Error('插件停止后台任务超时。')), 120000);
+    contents.once('destroyed', destroyed);
+    pluginExitPending.set(id, { sender: contents.id, finish });
+    try { contents.send('host-plugin-exit', id); } catch (error) { finish(error); }
+  }).finally(() => pluginExitRunning.delete(contents.id));
+  pluginExitRunning.set(contents.id, promise);
+  return promise;
+}
+ipcMain.on('host-plugin-exit-ready', event => { if (pluginViews.has(event.sender.id)) pluginExitHandlers.add(event.sender.id); });
+ipcMain.on('host-plugin-busy', (event, busy) => { if (pluginViews.has(event.sender.id)) { if (busy) pluginOperations.add(event.sender.id); else pluginOperations.delete(event.sender.id); } event.returnValue = undefined; });
+ipcMain.on('host-plugin-exit-result', (event, id, error) => {
+  const pending = pluginExitPending.get(id);
+  if (!pending || pending.sender !== event.sender.id) return;
+  pending.finish(error ? new Error(String(error).slice(0, 500)) : null);
+});
 let changingFolder = false;
 function pluginFolder() { return settings.pluginFolder || path.join(data, 'plugins'); }
 async function changePluginFolder(target) {
-  if ([...windows.values()].some(win => !win.isDestroyed())) throw new Error('请先关闭已打开的插件窗口，再更改插件目录。');
+  if ([...windows.values()].some(win => !win.isDestroyed())) throw new Error('请先关闭已打开的插件窗口；后台运行的插件需先取消“后台运行”并关闭窗口，再更改插件目录。');
   const destination = fs.realpathSync(target);
   if (!fs.statSync(destination).isDirectory()) throw new Error('请选择有效的文件夹。');
   if (path.resolve(destination).toLowerCase() === path.resolve(pluginFolder()).toLowerCase()) return;
@@ -132,7 +161,7 @@ async function changePluginFolder(target) {
     mapping.set(original, readPlugin(targetDir).dir);
   }
   const previous = settings;
-  settings = { ...settings, pluginFolder: destination, plugins: settings.plugins.map(dir => mapping.get(dir)), panel: settings.panel.map(dir => mapping.get(dir) || dir), independent: settings.independent.map(dir => mapping.get(dir) || dir) };
+  settings = { ...settings, pluginFolder: destination, plugins: settings.plugins.map(dir => mapping.get(dir)), panel: settings.panel.map(dir => mapping.get(dir) || dir), independent: settings.independent.map(dir => mapping.get(dir) || dir), background: settings.background.map(dir => mapping.get(dir) || dir), pluginStartup: settings.pluginStartup.map(dir => mapping.get(dir) || dir) };
   try { save(); } catch (error) { settings = previous; throw error; }
   let cleanupFailed = false;
   for (const { plugin } of sources) {
@@ -156,23 +185,35 @@ function showPanel() {
   const win = windowForPanel(); const point = screen.getCursorScreenPoint(); const area = screen.getDisplayNearestPoint(point).workArea; const [w, h] = win.getSize();
   win.setPosition(Math.max(area.x, Math.min(point.x, area.x + area.width - w)), Math.max(area.y, Math.min(point.y, area.y + area.height - h))); win.show(); win.focus();
 }
-function openPlugin(dir) {
+function openPlugin(dir, background = false) {
   const plugin = plugins().find(p => p.dir === dir); if (!plugin) throw new Error('工具不存在');
-  if (windows.has(dir) && !windows.get(dir).isDestroyed()) { windows.get(dir).show(); windows.get(dir).focus(); return; }
-  const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
-  const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
+  if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
+  const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, show: !background, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
+  const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
   const contents = view.webContents;
   win.setMenu(null);
   windows.set(dir, win); pluginViews.set(contents.id, win);
   win.setBrowserView(view);
-  const layout = () => { const [width, height] = win.getContentSize(); view.setBounds({ x: 0, y: 36, width, height: Math.max(0, height - 36) }); };
+  const layout = () => { const [width, height] = win.getContentSize(); view.setBounds({ x: 0, y: 36, width, height: Math.max(0, height - 36) }); const menu = pluginMenus.get(dir); if (menu) menu.setBounds({ x: Math.max(0, width - 432), y: 36, width: 286, height: 208 }); };
   layout(); win.on('resize', layout);
-  win.on('blur', () => { if (!settings.independent.includes(dir) && !pluginDialogs.has(win) && !win.isDestroyed()) win.hide(); });
-  win.on('closed', () => { windows.delete(dir); pluginViews.delete(contents.id); pluginDialogs.delete(win); if (!contents.isDestroyed()) contents.close(); });
+  win.on('blur', () => { if (!settings.independent.includes(dir) && !pluginDialogs.has(win) && !pluginOperations.has(contents.id) && !win.isDestroyed()) win.close(); });
+  let allowClose = false, closing = false;
+  win.on('close', e => {
+    if (allowClose || quitReady) return;
+    e.preventDefault();
+    if (!app.quitting && settings.background.includes(dir)) { win.hide(); return; }
+    if (closing || app.quitting) return;
+    closing = true;
+    cleanupPlugin(contents).then(() => { allowClose = true; if (!win.isDestroyed()) win.close(); }).catch(async error => {
+      if (!win.isDestroyed()) { pluginDialogs.add(win); win.show(); await dialog.showMessageBox(win, { type: 'error', message: '插件未能停止后台任务', detail: error.message }); pluginDialogs.delete(win); }
+    }).finally(() => { closing = false; });
+  });
+  contents.on('focus', () => { const menu = pluginMenus.get(dir); if (menu && win.getBrowserViews().includes(menu)) win.removeBrowserView(menu); });
+  win.on('closed', () => { const menu = pluginMenus.get(dir); pluginMenus.delete(dir); if (menu && !menu.webContents.isDestroyed()) menu.webContents.close(); windows.delete(dir); pluginViews.delete(contents.id); pluginExitHandlers.delete(contents.id); pluginOperations.delete(contents.id); pluginDialogs.delete(win); if (!contents.isDestroyed()) contents.close(); });
   contents.on('will-navigate', (event, url) => { if (!url.startsWith('file:')) event.preventDefault(); });
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.loadFile('index.html', { query: { plugin: '1' } });
-  contents.loadFile(plugin.main); if (panelWindow) panelWindow.hide();
+  contents.loadFile(plugin.main); if (!background && panelWindow) panelWindow.hide();
 }
 app.whenReady().then(async () => {
   if (!singleInstance) return;
@@ -182,24 +223,61 @@ app.whenReady().then(async () => {
   mainWindow.setMenu(null);
   mainWindow.loadFile('index.html'); mainWindow.on('close', e => { if (!app.quitting) { e.preventDefault(); mainWindow.hide(); } });
   tray = new Tray(nativeImage.createFromPath(path.join(bundle, 'app-icon.png')).resize({ width: 16, height: 16 }));
-  tray.setToolTip('轻匣'); tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开轻匣', click: showMain }, { label: '退出', click: () => { app.quitting = true; app.quit(); } }])); tray.on('click', showMain);
+  tray.setToolTip('轻匣'); tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开轻匣', click: showMain }, { label: '退出', click: () => app.quit() }])); tray.on('click', showMain);
+  for (const dir of settings.pluginStartup) {
+    if (!settings.plugins.includes(dir)) continue;
+    try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', '有后台插件启动失败，请检查插件文件是否完整。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
+  }
   try { uIOhook.on('mousedown', e => { if (e.button === 3 && settings.middle) showPanel(); }); uIOhook.start(); } catch (error) { console.error('鼠标快捷面板不可用:', error); const notice = () => mainWindow.webContents.send('notice', '鼠标中键快捷面板暂时不可用，请重启工具箱后重试。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
 });
-app.on('before-quit', () => { app.quitting = true; try { uIOhook.stop(); } catch (_) {} });
+app.on('before-quit', event => {
+  if (quitReady) { try { uIOhook.stop(); } catch (_) {} return; }
+  event.preventDefault();
+  if (quitPending) return;
+  quitPending = true; app.quitting = true;
+  const quittingIds = [...pluginViews.keys()];
+  let cleanupResults = [];
+  Promise.allSettled(quittingIds.map(id => {
+    const contents = require('electron').webContents.fromId(id);
+    return contents ? cleanupPlugin(contents) : pluginExitHandlers.has(id) ? Promise.reject(new Error('插件页面已关闭，无法确认后台任务是否停止。')) : Promise.resolve();
+  })).then(results => {
+    cleanupResults = results;
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    quitReady = true; app.quit();
+  }).catch(async error => {
+    app.quitting = false;
+    for (let i = 0; i < quittingIds.length; i++) {
+      if (cleanupResults[i]?.status !== 'fulfilled') continue;
+      const contents = require('electron').webContents.fromId(quittingIds[i]);
+      if (contents && !contents.isDestroyed()) contents.send('host-plugin-exit-cancelled');
+    }
+    await dialog.showMessageBox({ type: 'error', message: '轻匣未退出，因为插件后台任务未能停止', detail: error.message });
+  }).finally(() => { quitPending = false; });
+});
 ipcMain.handle('toolbox', async (event, action, value) => {
   try { return { ok: true, value: await toolboxAction(event, action, value) }; }
   catch (error) { console.error('工具箱操作失败:', action, error); return { ok: false, message: friendlyError(error) }; }
 });
 async function toolboxAction(event, action, value) {
-  const pluginEntry = [...windows.entries()].find(([, win]) => win.webContents === event.sender);
+  const pluginEntry = [...windows.entries()].find(([dir, win]) => win.webContents === event.sender || pluginMenus.get(dir)?.webContents === event.sender);
   if (pluginEntry) {
     const [dir] = pluginEntry;
-    if (action === 'plugin-state') return { name: readPlugin(dir).name, independent: settings.independent.includes(dir) };
-    if (action === 'plugin-independent') {
-      const previous = settings.independent;
-      settings.independent = value ? [...new Set([...previous, dir])] : previous.filter(item => item !== dir);
-      try { save(); } catch (error) { settings.independent = previous; throw error; }
-      return { name: readPlugin(dir).name, independent: settings.independent.includes(dir) };
+    const pluginState = () => ({ name: readPlugin(dir).name, independent: settings.independent.includes(dir), background: settings.background.includes(dir), pluginStartup: settings.pluginStartup.includes(dir) });
+    if (action === 'plugin-state') return pluginState();
+    if (action === 'plugin-menu' || action === 'plugin-menu-close') {
+      const win = pluginEntry[1]; let menu = pluginMenus.get(dir);
+      if (menu && win.getBrowserViews().includes(menu)) { win.removeBrowserView(menu); return; }
+      if (action === 'plugin-menu-close') return;
+      if (!menu) { menu = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } }); pluginMenus.set(dir, menu); menu.webContents.loadFile('index.html', { query: { 'plugin-menu': '1' } }); }
+      win.addBrowserView(menu); const [width] = win.getContentSize(); menu.setBounds({ x: Math.max(0, width - 432), y: 36, width: 286, height: 208 }); menu.webContents.focus(); return;
+    }
+    if (action === 'plugin-independent' || action === 'plugin-background' || action === 'plugin-startup') {
+      const key = action === 'plugin-independent' ? 'independent' : action === 'plugin-background' ? 'background' : 'pluginStartup';
+      const previous = settings[key];
+      settings[key] = value ? [...new Set([...previous, dir])] : previous.filter(item => item !== dir);
+      try { save(); } catch (error) { settings[key] = previous; throw error; }
+      return pluginState();
     }
     throw new Error('无权操作');
   }
@@ -218,7 +296,7 @@ async function toolboxAction(event, action, value) {
     return displayPlugin(readPlugin(path.dirname(r.filePaths[0])));
   }
   if (action === 'add') { const p = readPlugin(value); const base = pluginFolder(); fs.mkdirSync(base, { recursive: true }); const target = path.join(base, require('node:crypto').randomUUID()); fs.cpSync(p.dir, target, { recursive: true, errorOnExist: true, force: false, filter: source => !fs.lstatSync(source).isSymbolicLink() }); const installed = readPlugin(target); settings.plugins.push(installed.dir); save(); clearGithubStaging(); refresh(); return snapshot(); }
-  if (action === 'remove') { settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); save(); refresh(); return snapshot(); }
+  if (action === 'remove') { const win = windows.get(value); if (win && !win.isDestroyed()) { const contents = [...pluginViews.entries()].find(([, owner]) => owner === win); if (contents) await cleanupPlugin(require('electron').webContents.fromId(contents[0])); } settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save(); if (win && !win.isDestroyed()) win.close(); refresh(); return snapshot(); }
   if (action === 'panel') { const valid = new Set(plugins().map(p => p.dir)); settings.panel = value.filter(x => valid.has(x)); save(); refresh(); return snapshot(); }
   if (action === 'middle') { settings.middle = !!value; save(); refresh(); return snapshot(); }
   if (action === 'autostart') { app.setLoginItemSettings({ openAtLogin: !!value }); settings.autoStart = app.getLoginItemSettings().openAtLogin; save(); refresh(); return snapshot(); }

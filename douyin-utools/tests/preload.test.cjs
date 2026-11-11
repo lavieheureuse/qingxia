@@ -29,11 +29,11 @@ function eventTarget() {
 }
 
 function loadPreload(options = {}) {
-  const calls = { require: [], parse: [], store: [], browser: [], service: [], downloadFactory: 0, dispose: 0, clipboard: 0, heights: [], legacyHeights: [], enter: [], out: [], input: [] };
+  const calls = { require: [], parse: [], store: [], browser: [], service: [], downloadFactory: 0, dispose: 0, clipboard: 0, heights: [], legacyHeights: [], enter: [], out: [], exit: [], exitCancelled: [], input: [] };
   const apiCalls = Object.fromEntries(apiNames.map(name => [name, []]));
   const store = Object.freeze({ marker: 'in-memory store' });
   const downloader = Object.freeze({ marker: 'in-memory downloader' });
-  const browser = Object.freeze({ marker: 'in-memory browser', dispose() { calls.dispose += 1; } });
+  const browser = Object.freeze({ marker: 'in-memory browser', dispose() { calls.dispose += 1; return true; } });
   const clipboard = Object.freeze({ readText() { calls.clipboard += 1; throw new Error('Tests must never read clipboard'); } });
   const parser = Object.freeze({
     parseShareInput(input) {
@@ -57,7 +57,9 @@ function loadPreload(options = {}) {
       return options.relativePaths ? 'relative-not-accepted' : `C:\\fixture\\${name}`;
     },
     onPluginEnter(callback) { calls.enter.push(callback); },
-    onPluginOut(callback) { calls.out.push(callback); }
+    onPluginOut(callback) { calls.out.push(callback); },
+    onPluginExit(callback) { calls.exit.push(callback); },
+    onPluginExitCancelled(callback) { calls.exitCancelled.push(callback); }
   };
   if (!options.noHeightAPI) {
     if (!options.legacyHeight) host.setExpandHeight = height => calls.heights.push(height);
@@ -107,7 +109,7 @@ test('preload exposes only the narrow service, not Node/core capabilities', () =
   const dependencies = fixture.calls.service[0];
   assert.equal(dependencies.host, fixture.host);
   assert.equal(dependencies.store, fixture.store);
-  assert.equal(dependencies.browser, fixture.browser);
+  assert.deepEqual(Object.keys(dependencies.browser).sort(), ['available', 'dispose', 'openLogin', 'resolve', 'setTarget']);
   assert.equal(dependencies.downloader, fixture.downloader);
   assert.equal(dependencies.clipboard, fixture.clipboard);
   assert.equal(dependencies.parser, fixture.parser);
@@ -118,6 +120,15 @@ test('preload exposes only the narrow service, not Node/core capabilities', () =
   assert.equal(dependencies.version, '0.2.0');
   assert.ok(!fixture.calls.require.includes('./core/browser.cjs'));
   assert.equal(fixture.calls.clipboard, 0);
+});
+
+test('cancelled host exit recreates the browser after cleaning up', async () => {
+  const fixture = loadPreload();
+  await fixture.calls.exit[0]();
+  assert.equal(fixture.calls.dispose, 1);
+  assert.equal(fixture.apiCalls.cancel.length, 1);
+  fixture.calls.exitCancelled[0]();
+  assert.equal(fixture.calls.browser.length, 2);
 });
 
 test('plugin entry dispatches validated input only, without parsing/downloading it through the service', () => {

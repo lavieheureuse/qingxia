@@ -33,7 +33,7 @@ test('first read persists v2 defaults (connection / autoSync)', (t) => {
   assert.equal(first.connection.pcToken, '');
   assert.equal(first.frpc.path, '');
   assert.equal(first.frpc.source, 'downloaded');
-  assert.deepEqual(first.autoSync, { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC });
+  assert.deepEqual(first.autoSync, { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC, startOnLaunch: false });
   assert.equal(first.ui.autoScroll, true);
   assert.ok(fs.existsSync(store.settingsPath));
 
@@ -65,7 +65,7 @@ test('write/read roundtrip obfuscates pcToken, no BOM, atomic', (t) => {
   assert.equal(loaded.connection.pcToken, 'secret-token-abcd');
   assert.equal(loaded.frpc.path, 'C:\\tools\\frpc.exe');
   assert.equal(loaded.frpc.source, 'custom');
-  assert.deepEqual(loaded.autoSync, { enabled: true, intervalSec: 60 });
+  assert.deepEqual(loaded.autoSync, { enabled: true, intervalSec: 60, startOnLaunch: false });
   assert.equal(loaded.ui.autoScroll, false);
 
   const leftovers = fs.readdirSync(dir).filter((name) => name.endsWith('.tmp'));
@@ -97,7 +97,7 @@ test('normalizeSettings repairs invalid values and decodes legacy plaintext toke
   assert.equal(normalized.connection.pcId, 'pc-home');
   assert.equal(normalized.connection.pcToken, 'legacy-plain-token');
   assert.equal(normalized.frpc.source, 'downloaded');
-  assert.deepEqual(normalized.autoSync, { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC });
+  assert.deepEqual(normalized.autoSync, { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC, startOnLaunch: false });
   assert.equal(normalized.ui.autoScroll, true);
 
   const badInterval = normalizeSettings({ autoSync: { enabled: true, intervalSec: 0 } });

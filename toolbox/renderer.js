@@ -2,6 +2,7 @@
 const app = document.getElementById('app');
 const isPanel = new URLSearchParams(location.search).has('panel');
 const isPlugin = new URLSearchParams(location.search).has('plugin');
+const isPluginMenu = new URLSearchParams(location.search).has('plugin-menu');
 let state, page = 'home', query = '', selected = [], candidate = null, githubDialog = false, githubInput = '', githubLoading = false, githubCandidates = [], githubError = '', pluginError = '';
 const call = (action, value) => window.toolbox.call(action, value);
 const escapeHtml = x => String(x || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -25,14 +26,15 @@ function showDialog({ title, message, confirmText = '知道了', cancelText, dan
 }
 function showError(error) {
   const message = error && error.message ? error.message : '操作未完成，请重试。';
-  if (isPlugin) { pluginError = message; render(); return; }
+  if (isPlugin || isPluginMenu) { pluginError = message; render(); return; }
   if (githubDialog) { githubError = message; render(); const input = document.getElementById('github-url'); if (input) input.focus(); return; }
   if (state) render();
   void showDialog({ title: '操作未完成', message });
 }
 function render() {
   if (!state) return;
-  if (isPlugin) { app.innerHTML = `<header class="plugin-bar"><strong>${escapeHtml(state.name)}</strong>${pluginError ? `<span class="plugin-error" role="alert" title="${escapeHtml(pluginError)}">设置未保存</span>` : ''}<label class="plugin-mode"><input type="checkbox" data-setting="plugin-independent" ${state.independent ? 'checked' : ''}>独立窗口</label></header>`; return; }
+  if (isPlugin) { app.innerHTML = `<header class="plugin-bar"><strong>${escapeHtml(state.name)}</strong><button class="plugin-menu-button" data-action="plugin-menu" aria-label="插件设置" title="插件设置">☰</button></header>`; return; }
+  if (isPluginMenu) { app.innerHTML = `<div class="plugin-menu">${pluginError ? `<div class="plugin-menu-error" role="alert">${escapeHtml(pluginError)}</div>` : ''}<label class="plugin-menu-item"><input type="checkbox" data-setting="plugin-independent" ${state.independent ? 'checked' : ''}><span><strong>独立窗口</strong><small>点击外部时保持窗口</small></span></label><label class="plugin-menu-item"><input type="checkbox" data-setting="plugin-background" ${state.background ? 'checked' : ''}><span><strong>后台运行</strong><small>关闭插件页面后继续运行</small></span></label><label class="plugin-menu-item"><input type="checkbox" data-setting="plugin-startup" ${state.pluginStartup ? 'checked' : ''}><span><strong>随轻匣启动</strong><small>轻匣启动时自动运行此插件</small></span></label></div>`; return; }
   const list = state.plugins;
   if (isPanel) {
     app.innerHTML = `<main class="popup"><header><strong>超级面板</strong><button data-action="hide" aria-label="关闭">×</button></header><div class="grid">${state.panel.map(id => list.find(p => p.dir === id)).filter(Boolean).map(p => `<button class="tile" data-action="open" data-id="${escapeHtml(p.dir)}">${icon(p)}<span>${escapeHtml(p.name)}</span></button>`).join('')}<button class="tile plus" data-action="manage"><b>＋</b><span>管理面板</span></button></div></main>`; return;
@@ -54,6 +56,7 @@ async function handle(action, id) {
   if (action === 'panel-page' || action === 'manage') { page = 'panel'; selected = [...state.panel]; if (isPanel) { await call('manage'); return; } }
   if (action === 'open') await call('open', id);
   if (action === 'hide') await call('hide');
+  if (action === 'plugin-menu') await call('plugin-menu');
   if (action === 'pick') candidate = await call('pick');
   if (action === 'github') { githubDialog = true; githubCandidates = []; githubInput = ''; githubError = ''; }
   if (action === 'github-cancel') { githubDialog = false; githubCandidates = []; githubError = ''; await call('github-clear'); }
@@ -72,6 +75,7 @@ app.addEventListener('click', e => { const b = e.target.closest('[data-action]')
 app.addEventListener('input', e => { if (e.target.id === 'github-url') { githubInput = e.target.value; if (githubError) { githubError = ''; e.target.removeAttribute('aria-invalid'); e.target.removeAttribute('aria-describedby'); const error = document.getElementById('github-error'); if (error) error.remove(); } } if (e.target.id === 'search') { query = e.target.value; const pos = e.target.selectionStart; render(); const input = document.getElementById('search'); input.focus(); input.setSelectionRange(pos, pos); } });
 app.addEventListener('change', async e => { try { if (e.target.dataset.check) { const id = e.target.dataset.check; selected = e.target.checked ? [...selected, id] : selected.filter(x => x !== id); render(); } else if (e.target.dataset.setting) { state = await call(e.target.dataset.setting, e.target.checked); pluginError = ''; render(); } } catch (err) { showError(err); } });
 window.addEventListener('keydown', e => {
+  if (isPluginMenu && e.key === 'Escape') { e.preventDefault(); call('plugin-menu-close').catch(showError); return; }
   if (document.querySelector('dialog[open]')) return;
   const modal = app.querySelector('.overlay [role="dialog"]');
   if (modal && e.key === 'Escape') { e.preventDefault(); if (!githubLoading) handle(githubDialog ? 'github-cancel' : 'cancel').catch(showError); return; }
@@ -81,4 +85,4 @@ window.addEventListener('keydown', e => {
 window.toolbox.onUpdate(s => { state = s; render(); });
 window.toolbox.onNavigate(next => { page = next; selected = [...state.panel]; render(); });
 window.toolbox.onNotice(message => showError(new Error(message)));
-call(isPlugin ? 'plugin-state' : 'state').then(s => { state = s; render(); }).catch(err => { app.textContent = '界面加载失败，请重启轻匣后重试。'; if (!isPlugin) showError(err); });
+call(isPlugin || isPluginMenu ? 'plugin-state' : 'state').then(s => { state = s; render(); }).catch(err => { app.textContent = '界面加载失败，请重启轻匣后重试。'; if (!isPlugin && !isPluginMenu) showError(err); });

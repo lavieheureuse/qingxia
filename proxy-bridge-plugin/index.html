@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>应用代理</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><img src="logo.png" alt=""><strong>应用代理</strong></div>
+      <nav aria-label="功能导航">
+        <button class="nav active" data-page="overview">应用代理</button>
+        <button class="nav" data-page="servers">代理服务器</button>
+        <button class="nav" data-page="rules">应用规则</button>
+      </nav>
+    </aside>
+    <main>
+      <header><h1>应用代理</h1><p>为指定应用设置代理、直连或拦截规则。</p></header>
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section class="status">
+        <div><strong id="status-title">正在检查状态</strong><p id="status-detail">请稍候</p></div>
+        <span class="core">内置代理核心</span>
+        <button id="toggle" class="primary" disabled>启动代理</button>
+      </section>
+      <label class="startup-setting"><input id="auto-start" type="checkbox"> <span>插件启动时自动启动代理<small>配合“随轻匣启动”使用，可能需要管理员授权。</small></span></label>
+      <div id="overview" class="page">
+        <section class="section"><div class="section-title"><h2>代理端点</h2></div><div class="endpoint"><select id="default-server" aria-label="默认代理服务器"></select><button class="secondary" data-open="servers">管理服务器</button></div></section>
+        <section class="section"><div class="section-title"><div><h2>应用路由规则</h2><p>设置哪些应用通过代理访问网络。</p></div><button class="secondary" id="add-rule">＋ 添加规则</button></div><div class="table-wrap"><table><thead><tr><th>启用</th><th>应用程序</th><th>路由方式</th><th>代理端点</th><th>操作</th></tr></thead><tbody id="rules-list"></tbody></table><p id="rules-empty" class="empty">还没有规则，添加应用后即可启动代理。</p></div></section>
+      </div>
+      <div id="servers" class="page" hidden>
+        <section class="section"><div class="section-title"><div><h2>代理服务器</h2><p>添加已有的 SOCKS5 或 HTTP 代理。</p></div><button class="secondary" id="add-server">＋ 添加服务器</button></div><div id="servers-list" class="server-list"></div><p id="servers-empty" class="empty">还没有代理服务器。</p></section>
+      </div>
+      <div id="rules" class="page" hidden><section class="section"><div class="section-title"><div><h2>应用规则</h2><p>规则从上到下匹配；未匹配的流量直接连接。</p></div><button class="secondary" id="rules-add">＋ 添加规则</button></div><div id="rules-full"></div></section></div>
+    </main>
+  </div>
+  <dialog id="server-dialog"><form id="server-form"><h2 id="server-heading">添加代理服务器</h2><label>名称<input name="name" required maxlength="80" placeholder="例如：本地代理"></label><div class="form-row"><label>类型<select name="type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option></select></label><label>端口<input name="port" type="number" min="1" max="65535" required placeholder="1080"></label></div><label>服务器地址<input name="host" maxlength="253" placeholder="留空默认为 127.0.0.1"></label><label>用户名（可选）<input name="username" maxlength="255" autocomplete="off"></label><label>密码（可选）<input name="password" type="password" maxlength="255" autocomplete="new-password"></label><p class="hint">密码使用当前 Windows 账户加密保存；代理运行时会生成临时配置文件。</p><div class="dialog-actions"><button type="button" class="secondary cancel">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
+  <dialog id="rule-dialog"><form id="rule-form"><h2 id="rule-heading">添加应用规则</h2><label>应用程序名称或路径<div class="input-action"><input name="process" required maxlength="1024" placeholder="例如 chrome.exe"><button type="button" id="browse" class="secondary">选择应用</button></div></label><div class="form-row"><label>路由方式<select name="action"><option value="PROXY">使用代理</option><option value="DIRECT">直接连接</option><option value="BLOCK">阻止连接</option></select></label><label>代理服务器<select name="server"></select></label></div><label>目标 IP 地址<input name="hosts" placeholder="* 表示全部地址"></label><label>目标端口<input name="ports" placeholder="* 表示全部端口"></label><label>协议<select name="protocol"><option value="BOTH">TCP 和 UDP</option><option value="TCP">TCP</option><option value="UDP">UDP</option></select></label><div class="dialog-actions"><button type="button" class="secondary cancel">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
+  <dialog id="confirm-dialog"><form method="dialog"><h2>确认删除</h2><p id="confirm-text"></p><div class="dialog-actions"><button class="secondary" value="cancel">取消</button><button class="primary" value="confirm">删除</button></div></form></dialog>
+</body>
+</html>

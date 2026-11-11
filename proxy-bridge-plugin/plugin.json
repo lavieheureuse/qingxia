@@ -1,0 +1,6 @@
+{
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "features": [{ "code": "application-proxy", "description": "按应用配置代理、直连或拦截", "cmds": ["应用代理"] }]
+}

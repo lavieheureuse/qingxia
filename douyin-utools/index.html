@@ -50,9 +50,9 @@
       <section id="download-panel" class="view" role="tabpanel" aria-labelledby="download-tab">
         <form id="resolve-form" class="surface composer" novalidate>
           <div class="section-heading"><label for="share-input">视频链接或分享文本 <span class="required-label">必填</span></label><button id="clear-input" class="text-button" type="button" disabled>清空</button></div>
-          <textarea id="share-input" rows="3" maxlength="20000" placeholder="粘贴抖音视频链接，或直接粘贴完整分享文本" aria-describedby="input-hint input-error" spellcheck="false"></textarea>
+          <textarea id="share-input" rows="3" maxlength="20000" placeholder="粘贴抖音视频链接或分享文本；批量下载可粘贴多个链接" aria-describedby="input-hint input-error" spellcheck="false"></textarea>
           <p id="input-error" class="field-error" hidden></p>
-          <div class="composer-actions"><p id="input-hint" class="helper">先解析预览，再由你确认下载。</p><div class="button-group"><button id="paste-button" class="button button-secondary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>粘贴</button><button id="resolve-button" class="button button-primary" type="submit" disabled><span id="resolve-label">解析视频</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
+          <div class="composer-actions"><p id="input-hint" class="helper">单条可预览；多个链接可批量下载。</p><div class="button-group"><button id="paste-button" class="button button-secondary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>粘贴</button><button id="batch-button" class="button button-secondary" type="button" disabled>批量下载</button><button id="resolve-button" class="button button-primary" type="submit" disabled><span id="resolve-label">解析视频</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
         </form>
 
         <section class="surface preview-panel" aria-labelledby="preview-heading">
@@ -67,6 +67,7 @@
             <div class="status-line"><svg class="icon" aria-hidden="true"><use id="status-icon" href="#i-info"/></svg><p id="status-message" role="status" aria-live="polite"></p><button id="cancel-button" class="button button-stop" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg><span id="cancel-label">停止</span></button></div>
             <progress id="download-progress" max="100" aria-label="下载进度" hidden></progress><p id="progress-detail" class="progress-detail" hidden></p>
           </div>
+          <ol id="batch-results" class="batch-results" aria-label="批量下载结果" hidden></ol>
           <div class="login-row"><p id="login-hint">优先后台解析，独立引擎读完即退出。</p><button id="login-button" class="text-button" type="button" disabled>打开抖音 / 登录<svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></button></div>
         </section>
         <div class="directory-row"><span class="directory-icon"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></span><div class="directory-info"><span class="directory-label">保存位置</span><p id="output-directory">正在读取下载目录…</p></div><button id="choose-directory" class="button button-secondary" type="button" disabled>更改目录</button></div>

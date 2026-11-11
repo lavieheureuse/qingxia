@@ -193,7 +193,7 @@ function createService(options) {
     source: 'downloaded',
     download: null,
   };
-  let autoSync = { enabled: settings.autoSync.enabled, intervalSec: settings.autoSync.intervalSec, nextAt: null };
+  let autoSync = { enabled: settings.autoSync.enabled, intervalSec: settings.autoSync.intervalSec, startOnLaunch: settings.autoSync.startOnLaunch, nextAt: null };
   let lastSync = emptyLastSync();
   let lastError = null;
 
@@ -315,6 +315,7 @@ function createService(options) {
       autoSync: {
         enabled: !!autoSync.enabled,
         intervalSec: autoSync.intervalSec,
+        startOnLaunch: autoSync.startOnLaunch,
         nextAt: autoSync.nextAt,
       },
       lastSync: Object.assign({}, lastSync),
@@ -826,7 +827,7 @@ function createService(options) {
     fs.mkdirSync(dirs.logs, { recursive: true });
     settings = store.read();
     registerSecret(settings.connection.pcToken);
-    autoSync = { enabled: settings.autoSync.enabled, intervalSec: settings.autoSync.intervalSec, nextAt: null };
+    autoSync = { enabled: settings.autoSync.enabled || settings.autoSync.startOnLaunch, intervalSec: settings.autoSync.intervalSec, startOnLaunch: settings.autoSync.startOnLaunch, nextAt: null };
     await initBinary();
     restoreAppliedState();
     await takeOverExistingProcess();
@@ -834,7 +835,7 @@ function createService(options) {
     logSync('info', isConfigured()
       ? `插件已就绪（本机已应用版本：${applied.version === null ? '无' : `v${applied.version}`}）`
       : '尚未配置电脑连接，请在「连接设置」填写 API 地址、电脑 ID 与 Token');
-    scheduleAutoSync();
+    scheduleAutoSync(settings.autoSync.startOnLaunch);
     booted = true;
     emitState();
     return snapshot();
@@ -1409,7 +1410,7 @@ function createService(options) {
   // auto sync
   // --------------------------------------------------------------------
 
-  function scheduleAutoSync() {
+  function scheduleAutoSync(immediate = false) {
     if (autoTimer) {
       clearTimeout(autoTimer);
       autoTimer = null;
@@ -1418,7 +1419,7 @@ function createService(options) {
       autoSync.nextAt = null;
       return;
     }
-    const delay = Math.max(INTERVAL_MIN_SEC, autoSync.intervalSec) * 1000;
+    const delay = immediate ? 0 : Math.max(INTERVAL_MIN_SEC, autoSync.intervalSec) * 1000;
     autoSync.nextAt = Date.now() + delay;
     autoTimer = setTimeout(runAutoSyncTick, delay);
     if (typeof autoTimer.unref === 'function') autoTimer.unref();
@@ -1451,6 +1452,18 @@ function createService(options) {
     }).catch(() => {});
   }
 
+  function setStartOnLaunch(enabled) {
+    return enqueue(async () => {
+      await ensureBooted();
+      if (typeof enabled !== 'boolean') throw createError('VALIDATION', '启动时自动同步开关必须是布尔值');
+      settings.autoSync.startOnLaunch = enabled;
+      settings = store.write(settings);
+      autoSync.startOnLaunch = enabled;
+      emitState();
+      return snapshot();
+    });
+  }
+
   function setAutoSync(enabled, intervalSec) {
     return enqueue(async () => {
       await ensureBooted();
@@ -1461,7 +1474,7 @@ function createService(options) {
       if (!Number.isInteger(interval) || interval < INTERVAL_MIN_SEC || interval > INTERVAL_MAX_SEC) {
         throw createError('VALIDATION', `同步间隔须为 ${INTERVAL_MIN_SEC}-${INTERVAL_MAX_SEC} 秒`);
       }
-      settings.autoSync = { enabled, intervalSec: interval };
+      settings.autoSync = { ...settings.autoSync, enabled, intervalSec: interval };
       settings = store.write(settings);
       autoSync.enabled = enabled;
       autoSync.intervalSec = interval;
@@ -1609,10 +1622,24 @@ function createService(options) {
     bootPromise = null;
   }
 
+  function shutdown() {
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = null;
+    return enqueue(async () => {
+      if (disposed) return;
+      await ensureBooted();
+      if (autoTimer) clearTimeout(autoTimer);
+      autoTimer = null;
+      if (frpcState.running) await stopFrpcProcess();
+    });
+  }
+
   return {
     // lifecycle
     bootstrap,
     dispose,
+    shutdown,
+    resumeAfterCancelledExit: scheduleAutoSync,
     getState,
     onState,
     onLog,
@@ -1623,6 +1650,7 @@ function createService(options) {
     syncNow,
     publishProxies,
     setAutoSync,
+    setStartOnLaunch,
     // frpc process
     startFrpc,
     stopFrpc,

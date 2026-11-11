@@ -614,6 +614,35 @@ test('stopFrpc()/startFrpc()/restartFrpc() drive the process and report status',
   assert.equal(api.state.statusReports[api.state.statusReports.length - 1].frpcRunning, true);
 });
 
+test('shutdown() stops the running frpc and keeps saved settings', async (t) => {
+  const api = await createFakeApi(t);
+  const { service, dataDir, state } = setup(t);
+  await prime(service, api, dataDir);
+  await service.syncNow();
+  const runner = latestRunner(state);
+  assert.equal(runner.startCount, 1);
+  await service.shutdown();
+  assert.equal(runner.stopCount, 1);
+  assert.equal(fs.existsSync(path.join(dataDir, 'run', 'frpc.pid')), false);
+  assert.equal(fs.existsSync(path.join(dataDir, 'settings.json')), true);
+  await service.shutdown();
+});
+
+test('shutdown() reports a stop failure and allows retry', async (t) => {
+  const api = await createFakeApi(t);
+  const { service, dataDir, state } = setup(t);
+  await prime(service, api, dataDir);
+  await service.syncNow();
+  const runner = latestRunner(state);
+  const stop = runner.stop;
+  runner.stop = async () => { throw new Error('stop failed'); };
+  await assert.rejects(service.shutdown(), /stop failed/);
+  assert.equal(fs.existsSync(path.join(dataDir, 'run', 'frpc.pid')), true);
+  runner.stop = stop;
+  await service.shutdown();
+  assert.equal(fs.existsSync(path.join(dataDir, 'run', 'frpc.pid')), false);
+});
+
 test('startFrpc() requires a config and a binary; unexpected exits set phase=error', async (t) => {
   const api = await createFakeApi(t);
   const { service, dataDir, state } = setup(t);
@@ -641,6 +670,26 @@ test('startFrpc() requires a config and a binary; unexpected exits set phase=err
 // ---------------------------------------------------------------------------
 // auto sync
 // ---------------------------------------------------------------------------
+
+test('启动时自动同步设置持久化，并在下次启动时立即同步', async (t) => {
+  const api = await createFakeApi(t);
+  const { service, dataDir, internals } = setup(t);
+  await prime(service, api, dataDir);
+  await service.setStartOnLaunch(true);
+  await service.setAutoSync(false, 45);
+  service.dispose();
+
+  const restarted = createService({ dataDir, internals });
+  t.after(() => restarted.dispose());
+  const initial = await restarted.bootstrap();
+  assert.equal(initial.autoSync.startOnLaunch, true);
+  assert.equal(initial.autoSync.enabled, true);
+  await waitFor(() => restarted.getState().lastSync.ok === true, 4000, '启动时同步');
+  assert.equal(api.state.configRequests, 1);
+  assert.ok(restarted.getState().autoSync.nextAt > Date.now());
+  await restarted.setStartOnLaunch(false);
+  assert.equal(createStore(dataDir).read().autoSync.startOnLaunch, false);
+});
 
 test('setAutoSync() schedules polling, skips unchanged versions and can be disabled', async (t) => {
   const api = await createFakeApi(t);

@@ -50,6 +50,27 @@ const PAPER_SIZES = {
   Legal: { width: 216, height: 356 }
 };
 const IS_WIN = process.platform === 'win32';
+const activeProcesses = new Set();
+let exiting = false;
+function trackProcess(child) {
+  activeProcesses.add(child);
+  child.once('close', () => activeProcesses.delete(child));
+}
+async function stopProcesses() {
+  exiting = true;
+  try {
+    await Promise.all([...activeProcesses].map(child => new Promise((resolve, reject) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      const timer = setTimeout(() => { child.removeListener('close', done); reject(new Error('打印程序未能停止，请稍后重试。')); }, 8000);
+      function done() { clearTimeout(timer); resolve(); }
+      child.once('close', done);
+      try { if (!child.kill() && child.exitCode === null && child.signalCode === null) throw new Error('无法停止打印程序。'); }
+      catch (error) { clearTimeout(timer); child.removeListener('close', done); reject(error); }
+    })));
+  } catch (error) { exiting = false; throw error; }
+}
+if (typeof utools !== 'undefined' && typeof utools.onPluginExit === 'function') utools.onPluginExit(stopProcesses);
+if (typeof utools !== 'undefined' && typeof utools.onPluginExitCancelled === 'function') utools.onPluginExitCancelled(() => { exiting = false; });
 
 /* ------------------------------- 工具函数 ------------------------------- */
 function extname(p) {
@@ -97,11 +118,13 @@ function imageSize(filePath) {
 
 function run(cmd, args, opts) {
   return new Promise((resolve) => {
+    if (exiting) return resolve({ err: new Error('插件正在退出'), stdout: '', stderr: '' });
     const timeout = (opts && opts.timeout) || 60000;
     let child;
     try {
       child = execFile(cmd, args, Object.assign({ windowsHide: true, maxBuffer: 10 * 1024 * 1024, timeout }, opts || {}),
         (err, stdout, stderr) => resolve({ err: err || null, stdout: stdout || '', stderr: stderr || '' }));
+      trackProcess(child);
     } catch (e) {
       resolve({ err: e, stdout: '', stderr: String(e && e.message || e) });
     }
@@ -472,6 +495,7 @@ function buildSumatraSettings(opt) {
 
 function printWithSumatra(filePath, opt, exePath) {
   return new Promise((resolve) => {
+    if (exiting) return resolve({ ok: false, engine: 'sumatra', reason: '插件正在退出' });
     const args = [];
     if (opt.printerName) args.push('-print-to', opt.printerName);
     else args.push('-print-to-default');
@@ -482,6 +506,7 @@ function printWithSumatra(filePath, opt, exePath) {
         if (err) return resolve({ ok: false, engine: 'sumatra', reason: 'sumatra:' + (String(err.message || err)).slice(0, 160) });
         resolve({ ok: true, engine: 'sumatra' });
       });
+      trackProcess(child);
     } catch (e) {
       resolve({ ok: false, engine: 'sumatra', reason: String(e && e.message || e) });
     }
@@ -628,9 +653,11 @@ function detectEnv() {
 /* ------------------------------- 批量打印 ------------------------------- */
 async function printFiles(files, opt, onProgress) {
   const env = await detectEnv();
+  if (exiting) throw new Error('插件正在退出');
   const results = [];
   let okCount = 0;
   for (let i = 0; i < files.length; i++) {
+    if (exiting) throw new Error('插件正在退出');
     const f = files[i];
     const name = baseName(f);
     const kind = fileKind(f);
@@ -664,6 +691,7 @@ async function printFiles(files, opt, onProgress) {
       }
     }
 
+    if (exiting) throw new Error('插件正在退出');
     if (r.ok) okCount++;
     results.push({ file: f, name, ok: r.ok, engine: r.engine, reason: r.ok ? '' : r.reason });
     onProgress && onProgress({ index: i, total: files.length, file: f, name, status: 'done', ok: r.ok, engine: r.engine, reason: r.reason });

@@ -19,7 +19,8 @@
   try {
     const dataDirectory = path.join(hostPath('userData', path.join(os.homedir(), '.config')), 'shiying-douyin-plugin');
     const store = createStore(dataDirectory);
-    const browser = createTransientResolver({ dataDirectory, parser });
+    let browserInstance = createTransientResolver({ dataDirectory, parser });
+    const browser = Object.freeze({ available: (...args) => browserInstance.available(...args), resolve: (...args) => browserInstance.resolve(...args), openLogin: (...args) => browserInstance.openLogin(...args), setTarget: (...args) => browserInstance.setTarget(...args), dispose: (...args) => browserInstance.dispose(...args) });
     const service = createService({ host, clipboard, store, parser, browser, downloader: createDownloader(),
       defaultDirectory: path.join(hostPath('downloads', path.join(os.homedir(), 'Downloads')), '拾影'), version: '0.2.0' });
     // Neither transport injection nor arbitrary file/network access crosses this bridge.
@@ -38,6 +39,16 @@
         else if (typeof host.setExpendHeight === 'function') host.setExpendHeight(600); // Legacy hosts.
         if (action && typeof action.payload === 'string') deliver(action.payload);
       });
+    }
+    if (host && typeof host.onPluginExit === 'function') {
+      host.onPluginExit(async () => {
+        const stopped = browser.dispose();
+        await service.cancel();
+        if (!stopped) throw new Error('浏览器未能完全停止，请稍后重试。');
+      });
+    }
+    if (host && typeof host.onPluginExitCancelled === 'function') {
+      host.onPluginExitCancelled(() => { browserInstance = createTransientResolver({ dataDirectory, parser }); });
     }
     // Do not cancel onPluginOut: users may temporarily hide uTools while downloading.
     window.addEventListener('beforeunload', () => { browser.dispose(); void service.cancel(); }, { once: true });
