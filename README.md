@@ -15,6 +15,7 @@
 | 密码盒子 | [`password-box-ui/`](password-box-ui/) | 轻匣插件格式示例 |
 | 时间戳 | [`timestamp/`](timestamp/) | 时间戳与日期时间转换 |
 | Hosts 管理 | [`hosts-tool/`](hosts-tool/) | 按环境编辑和切换系统 Hosts 配置 |
+| uPrint 批量打印 | [`uPrint/`](uPrint/) | 批量打印 PDF、Word 文档和图片，可设置纸张、页边距、方向、份数及页码范围 |
 
 开发者请先阅读[插件开发规范](toolbox/插件开发规范.md)。规范以轻匣当前实现为准，列明支持的插件结构、字段和宿主接口边界。
 
