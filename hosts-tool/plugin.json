@@ -1,0 +1,6 @@
+{
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "features": [{ "code": "hosts-editor", "description": "按环境编辑和切换 Hosts 配置", "cmds": ["Hosts 快速编辑", "hosts"] }]
+}
