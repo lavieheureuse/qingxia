@@ -77,8 +77,13 @@ function readPlugin(dir) {
   const main = inside(manifest.main), preload = manifest.preload ? inside(manifest.preload) : '';
   const feature = manifest.features && manifest.features[0] || {};
   let icon = ''; try { icon = inside(manifest.logo); } catch (_) {}
-  return { dir: root, main, preload, icon, name: (Array.isArray(feature.cmds) ? feature.cmds : []).find(x => typeof x === 'string') || feature.code || path.basename(root), description: feature.description || '', code: feature.code || '' };
+  const name = (Array.isArray(feature.cmds) ? feature.cmds : []).find(x => typeof x === 'string') || feature.code || path.basename(root);
+  const id = typeof manifest.id === 'string' ? manifest.id.trim().toLowerCase() : '';
+  const code = typeof feature.code === 'string' ? feature.code.trim().toLowerCase() : '';
+  const identity = code && typeof name === 'string' ? 'feature:' + JSON.stringify([code, name.trim().toLowerCase()]) : 'manifest:' + require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestPath)).digest('hex');
+  return { dir: root, main, preload, icon, name, description: feature.description || '', code: feature.code || '', pluginId: id, identity };
 }
+function samePlugin(a, b) { return a.pluginId && b.pluginId ? a.pluginId === b.pluginId : a.identity === b.identity; }
 function displayPlugin(p) { return { ...p, icon: p.icon ? require('node:url').pathToFileURL(p.icon).href : '' }; }
 function friendlyError(error) {
   if (error.code === 'ENOENT') return '找不到插件需要的文件。请确认插件已经完整解压，并重新选择包含 plugin.json 的文件夹。';
@@ -326,6 +331,46 @@ ipcMain.handle('toolbox', async (event, action, value) => {
   try { return { ok: true, value: await toolboxAction(event, action, value) }; }
   catch (error) { console.error('工具箱操作失败:', action, error); return { ok: false, message: friendlyError(error) }; }
 });
+async function installPlugins(sources, replace) {
+  const installed = plugins();
+  for (let i = 0; i < sources.length; i++) {
+    if (sources.slice(0, i).some(other => samePlugin(other, sources[i]))) throw new Error('所选插件中有重复项，请只选择一个。');
+    const matches = installed.filter(other => samePlugin(other, sources[i]));
+    if (matches.length && !replace) throw new Error(`“${sources[i].name}”已添加，请确认是否更新。`);
+    if (matches.some(other => { const win = windows.get(other.dir); return win && !win.isDestroyed(); })) throw new Error(`请先关闭“${sources[i].name}”插件；如果它在后台运行，请先停止后台运行后再更新。`);
+  }
+  const base = pluginFolder(), created = [], mapping = new Map(), previous = settings;
+  fs.mkdirSync(base, { recursive: true });
+  try {
+    for (const source of sources) {
+      const target = path.join(base, require('node:crypto').randomUUID());
+      fs.mkdirSync(target);
+      created.push(target);
+      fs.cpSync(source.dir, target, { recursive: true, errorOnExist: true, force: false, filter: entry => !fs.lstatSync(entry).isSymbolicLink() });
+      const fresh = readPlugin(target);
+      for (const old of installed.filter(other => samePlugin(other, source))) mapping.set(old.dir, fresh.dir);
+    }
+    const remap = values => [...new Set(values.map(dir => mapping.get(dir) || dir))];
+    settings = { ...previous, plugins: remap([...previous.plugins, ...created.map(dir => fs.realpathSync(dir))]), panel: remap(previous.panel), independent: remap(previous.independent), background: remap(previous.background), pluginStartup: remap(previous.pluginStartup) };
+    save();
+  } catch (error) {
+    settings = previous;
+    for (const dir of created) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件失败:', cleanupError); } }
+    throw error;
+  }
+  let cleanupFailed = false;
+  let realBase = '';
+  try { realBase = fs.realpathSync(base); } catch (error) { console.error('检查插件目录失败:', error); cleanupFailed = mapping.size > 0; }
+  for (const old of mapping.keys()) {
+    try {
+      if (!fs.existsSync(old)) continue;
+      if (!realBase || path.dirname(fs.realpathSync(old)).toLowerCase() !== realBase.toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(old)) || fs.lstatSync(old).isSymbolicLink()) { cleanupFailed = true; continue; }
+      await shell.trashItem(old);
+    } catch (error) { console.error('清理旧插件副本失败:', error); cleanupFailed = true; }
+  }
+  clearGithubStaging(); refresh();
+  return { ...snapshot(), ...(cleanupFailed ? { warning: '插件已更新，但部分旧插件文件夹未能移入回收站。请关闭相关程序后检查插件目录。' } : {}) };
+}
 async function toolboxAction(event, action, value) {
   const pluginEntry = [...windows.entries()].find(([dir, win]) => win.webContents === event.sender || pluginMenus.get(dir)?.webContents === event.sender);
   if (pluginEntry) {
@@ -362,32 +407,16 @@ async function toolboxAction(event, action, value) {
     if (path.basename(r.filePaths[0]).toLowerCase() !== 'plugin.json') throw new Error('请选择名为 plugin.json 的插件配置文件。');
     return displayPlugin(readPlugin(path.dirname(r.filePaths[0])));
   }
-  if (action === 'add') { const p = readPlugin(value); const base = pluginFolder(); fs.mkdirSync(base, { recursive: true }); const target = path.join(base, require('node:crypto').randomUUID()); fs.cpSync(p.dir, target, { recursive: true, errorOnExist: true, force: false, filter: source => !fs.lstatSync(source).isSymbolicLink() }); const installed = readPlugin(target); settings.plugins.push(installed.dir); save(); clearGithubStaging(); refresh(); return snapshot(); }
+  if (action === 'add') return installPlugins([readPlugin(typeof value === 'string' ? value : value.dir)], typeof value === 'object' && value?.replace === true);
   if (action === 'add-many') {
-    if (!Array.isArray(value) || !value.length || value.length > 100 || new Set(value).size !== value.length) throw new Error('请选择要添加的插件。');
-    const sources = value.map(dir => {
+    const dirs = Array.isArray(value) ? value : value?.dirs;
+    if (!Array.isArray(dirs) || !dirs.length || dirs.length > 100 || new Set(dirs).size !== dirs.length) throw new Error('请选择要添加的插件。');
+    const sources = dirs.map(dir => {
       const plugin = readPlugin(dir);
       if (![...githubStaging].some(root => { const relative = path.relative(fs.realpathSync(root), plugin.dir); return relative && !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative); })) throw new Error('插件来源已失效，请重新查找。');
       return plugin;
     });
-    const base = pluginFolder(), created = [], previous = settings.plugins;
-    fs.mkdirSync(base, { recursive: true });
-    try {
-      for (const plugin of sources) {
-        const target = path.join(base, require('node:crypto').randomUUID());
-        fs.mkdirSync(target);
-        created.push(target);
-        fs.cpSync(plugin.dir, target, { recursive: true, errorOnExist: true, force: false, filter: source => !fs.lstatSync(source).isSymbolicLink() });
-        readPlugin(target);
-      }
-      settings.plugins = [...previous, ...created.map(dir => fs.realpathSync(dir))];
-      save();
-    } catch (error) {
-      settings.plugins = previous;
-      for (const dir of created) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件失败:', cleanupError); } }
-      throw error;
-    }
-    clearGithubStaging(); refresh(); return snapshot();
+    return installPlugins(sources, !Array.isArray(value) && value?.replace === true);
   }
   if (action === 'remove') { const win = windows.get(value); if (win && !win.isDestroyed()) { const contents = [...pluginViews.entries()].find(([, owner]) => owner === win); if (contents) await cleanupPlugin(require('electron').webContents.fromId(contents[0])); } settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save(); if (win && !win.isDestroyed()) win.close(); refresh(); return snapshot(); }
   if (action === 'panel') { const valid = new Set(plugins().map(p => p.dir)); settings.panel = value.filter(x => valid.has(x)); save(); refresh(); return snapshot(); }
