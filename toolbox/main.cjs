@@ -195,8 +195,9 @@ let changingFolder = false;
 function pluginFolder() { return settings.pluginFolder || path.join(data, 'plugins'); }
 async function changePluginFolder(target) {
   if ([...windows.values()].some(win => !win.isDestroyed())) throw new Error('请先关闭已打开的插件窗口；后台运行的插件需先取消“后台运行”并关闭窗口，再更改插件目录。');
-  const destination = fs.realpathSync(target);
-  if (!fs.statSync(destination).isDirectory()) throw new Error('请选择有效的文件夹。');
+  const selected = fs.realpathSync(target);
+  if (!fs.statSync(selected).isDirectory()) throw new Error('请选择有效的文件夹。');
+  const destination = path.basename(selected).toLowerCase() === 'qingxia-plugin' ? selected : path.join(selected, 'qingxia-plugin');
   if (path.resolve(destination).toLowerCase() === path.resolve(pluginFolder()).toLowerCase()) return;
   const oldFolder = pluginFolder();
   const sources = settings.plugins.map(dir => ({ original: dir, plugin: readPlugin(dir) }));
@@ -204,21 +205,36 @@ async function changePluginFolder(target) {
     const relative = path.relative(plugin.dir, destination);
     if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('新目录不能位于已安装插件的文件夹内。');
   }
-  const mapping = new Map();
-  for (const { original, plugin } of sources) {
-    const targetDir = path.join(destination, require('node:crypto').randomUUID());
-    await fs.promises.cp(plugin.dir, targetDir, { recursive: true, errorOnExist: true, force: false, filter: source => { if (fs.lstatSync(source).isSymbolicLink()) throw new Error('插件中包含快捷链接，无法安全复制；原目录没有改变。'); return true; } });
-    mapping.set(original, readPlugin(targetDir).dir);
-  }
+  if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) throw new Error('插件目录不能是快捷链接，请选择其他位置。');
+  fs.mkdirSync(destination, { recursive: true });
+  if (!fs.statSync(destination).isDirectory()) throw new Error('插件目录不可用，请选择其他位置。');
+  const mapping = new Map(), created = [];
   const previous = settings;
-  settings = { ...settings, pluginFolder: destination, plugins: settings.plugins.map(dir => mapping.get(dir)), panel: settings.panel.map(dir => mapping.get(dir) || dir), independent: settings.independent.map(dir => mapping.get(dir) || dir), background: settings.background.map(dir => mapping.get(dir) || dir), pluginStartup: settings.pluginStartup.map(dir => mapping.get(dir) || dir) };
-  try { save(); } catch (error) { settings = previous; throw error; }
+  try {
+    for (const { original, plugin } of sources) {
+      const targetDir = path.join(destination, require('node:crypto').randomUUID());
+      fs.mkdirSync(targetDir);
+      created.push(targetDir);
+      for (const entry of await fs.promises.readdir(plugin.dir)) {
+        await fs.promises.cp(path.join(plugin.dir, entry), path.join(targetDir, entry), { recursive: true, errorOnExist: true, force: false, filter: source => { if (fs.lstatSync(source).isSymbolicLink()) throw new Error('插件中包含快捷链接，无法安全复制；原目录没有改变。'); return true; } });
+      }
+      mapping.set(original, readPlugin(targetDir).dir);
+    }
+    settings = { ...settings, pluginFolder: destination, plugins: settings.plugins.map(dir => mapping.get(dir)), panel: settings.panel.map(dir => mapping.get(dir) || dir), independent: settings.independent.map(dir => mapping.get(dir) || dir), background: settings.background.map(dir => mapping.get(dir) || dir), pluginStartup: settings.pluginStartup.map(dir => mapping.get(dir) || dir) };
+    save();
+  } catch (error) {
+    settings = previous;
+    for (const dir of created) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件迁移失败:', cleanupError); } }
+    throw error;
+  }
   let cleanupFailed = false;
   for (const { plugin } of sources) {
     if (path.dirname(plugin.dir).toLowerCase() !== path.resolve(oldFolder).toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(plugin.dir))) { cleanupFailed = true; continue; }
     try { await shell.trashItem(plugin.dir); } catch (error) { console.error('清理旧插件目录失败:', error); cleanupFailed = true; }
   }
-  try { fs.rmdirSync(oldFolder); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) cleanupFailed = true; }
+  if (path.resolve(oldFolder).toLowerCase() === path.resolve(data, 'plugins').toLowerCase() || path.basename(path.resolve(oldFolder)).toLowerCase() === 'qingxia-plugin') {
+    try { fs.rmdirSync(oldFolder); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) cleanupFailed = true; }
+  }
   return cleanupFailed ? '插件已迁移到新目录，但部分旧插件文件未能清理，请检查原目录。' : '';
 }
 function plugins() { return settings.plugins.flatMap(dir => { try { return [readPlugin(dir)]; } catch (_) { return []; } }); }
@@ -381,7 +397,7 @@ async function toolboxAction(event, action, value) {
   if (action === 'change-folder') {
     changingFolder = true;
     try {
-      const result = await dialog.showOpenDialog(mainWindow, { title: '选择新的插件目录', properties: ['openDirectory', 'createDirectory'] });
+      const result = await dialog.showOpenDialog(mainWindow, { title: '选择插件存放位置（自动创建 qingxia-plugin 文件夹）', properties: ['openDirectory', 'createDirectory'] });
       if (result.canceled || !result.filePaths.length) return snapshot();
       const warning = await changePluginFolder(result.filePaths[0]); refresh(); return { ...snapshot(), warning };
     }
