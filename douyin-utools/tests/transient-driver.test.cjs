@@ -144,6 +144,7 @@ function environment(settings = {}) {
           this.response(request, { error: { code: -32000, message: SECRET, data: SECRET } });
           return;
         }
+        if (request.method === 'Target.getTargets' && settings.targetLists) return this.response(request, { result: { targetInfos: settings.targetLists.shift() || [] } });
         if (request.method === 'Target.createTarget') return this.response(request, { result: { targetId: 'owned-target' } });
         if (request.method === 'Target.attachToTarget') return this.response(request, { result: { sessionId: 'owned-session' } });
         if (request.method === 'Runtime.evaluate') {
@@ -195,6 +196,15 @@ async function reached(predicate) {
   for (let attempt = 0; attempt < 30 && !predicate(); attempt++) await new Promise(setImmediate);
   assert.equal(!!predicate(), true, 'offline fixture did not reach expected phase');
 }
+
+test('page close observation waits until the owned target disappears', async () => {
+  const env = environment({ targetLists: [[], [{ targetId: 'owned-target' }], []] });
+  const browser = await env.driver.launch(env.options);
+  const page = await browser.createTarget();
+  await page.waitForClose();
+  assert.equal(env.wires.filter(item => item.method === 'Target.getTargets').length, 3);
+  await browser.close();
+});
 
 function safeError(code) {
   return (e) => {

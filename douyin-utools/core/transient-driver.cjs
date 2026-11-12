@@ -532,6 +532,15 @@ function createDriver(injected = {}) {
             subscriptions.get(method).add(handler);
             return () => subscriptions.get(method)?.delete(handler);
           },
+          async waitForClose() {
+            while (!closing && !exited) {
+              try {
+                const listed = await send('Target.getTargets');
+                if (Array.isArray(listed.targetInfos) && !listed.targetInfos.some(target => target.targetId === targetId)) return;
+              } catch (_) { /* A transient protocol failure does not prove the window closed. */ }
+              await Promise.race([delay(500), stopped, exitPromise]);
+            }
+          },
           async close() {
             if (targetClosed) return;
             targetClosed = true;

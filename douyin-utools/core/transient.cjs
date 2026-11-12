@@ -5,7 +5,22 @@ const { createDriver } = require('./transient-driver.cjs');
 const { capturePage, videoFromSnapshot } = require('./browser.cjs');
 
 const failure = (code, message) => Object.assign(new Error(message), { code });
-const terminal = new Set(['NOT_PUBLIC','NOT_VIDEO','VIDEO_MISMATCH','UNSAFE_REDIRECT']);
+const terminal = new Set(['NOT_PUBLIC','NOT_VIDEO','VIDEO_MISMATCH','UNSAFE_REDIRECT','INVALID_PROFILE','PROFILE_UNAVAILABLE']);
+function profileInput(input) {
+  if (typeof input !== 'string' || input.length > 20000) throw failure('INVALID_PROFILE','请输入用户主页分享链接。');
+  const links = input.match(/https?:\/\/[^\s<>"'`]+/gi) || [];
+  if (links.length !== 1) throw failure('INVALID_PROFILE','请提供一个抖音用户主页分享链接。');
+  try {
+    const url = new URL(links[0].replace(/[，。！？、；：）》】」』“”‘’.,!;:)\]}]+$/u, ''));
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) throw 0;
+    if (url.hostname === 'v.douyin.com' && /^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) return url.origin + url.pathname;
+    if (['www.douyin.com','douyin.com','www.iesdouyin.com','iesdouyin.com','m.iesdouyin.com'].includes(url.hostname)) {
+      const match = /^\/(?:share\/)?user\/([A-Za-z0-9_-]{5,200})\/?$/.exec(url.pathname);
+      if (match) return `https://www.douyin.com/user/${match[1]}`;
+    }
+  } catch (_) { /* Invalid or untrusted profile URL. */ }
+  throw failure('INVALID_PROFILE','请提供有效的抖音用户主页分享链接。');
+}
 function findEngine({ platform = process.platform, environment = process.env, io = fs } = {}) {
   const candidates = [];
   if (platform === 'win32') {
@@ -105,6 +120,65 @@ function createTransientResolver({ dataDirectory, parser, engineFinder = findEng
       try { await finish(token); } catch { throw publicError({code:'CLEANUP'}); }
     }
   }
+  async function profileVideos(input, start, end, {signal}={}) {
+    const target=profileInput(input);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > 1000 || end-start+1 > 100) throw failure('INVALID_PROFILE','请输入有效范围：序号为 1 至 1000，单次最多 100 条。');
+    const token=acquire('profile');
+    const abort=()=>{if(token.browser)void token.browser.close().catch(()=>{});};
+    if(signal)signal.addEventListener('abort',abort,{once:true});
+    try {
+      const browser=await launch(token,true,signal), page=await browser.createTarget();
+      let canonical=target;
+      if(target.startsWith('https://v.douyin.com/')) {
+        await page.navigate(target);
+        const deadline=now()+12000;
+        while(now()<deadline) {
+          check(signal);
+          try {
+            const result=await page.evaluate('location.href');
+            const url=new URL(result.value);
+            if(url.hostname !== 'v.douyin.com' && url.href !== 'about:blank') { canonical=profileInput(url.origin+url.pathname); break; }
+          } catch(error) { if(error && error.code==='INVALID_PROFILE') throw error; }
+          await wait(250,signal);
+        }
+        if(canonical===target) throw failure('PROFILE_UNAVAILABLE','无法识别主页链接，请稍后重试。');
+      }
+      const userId=canonical.split('/').pop(), ids=[], requests=new Set(), pending=new Set();
+      page.on('Network.responseReceived', event=>{
+        try {
+          const u=new URL(event.response.url);
+          if(u.protocol==='https:' && u.hostname==='www.douyin.com' && u.pathname==='/aweme/v1/web/aweme/post/' && u.searchParams.get('sec_user_id')===userId && event.response.status===200) requests.add(event.requestId);
+        } catch (_) { /* Ignore unrelated responses. */ }
+      });
+      page.on('Network.loadingFinished', event=>{
+        if(!requests.delete(event.requestId))return;
+        const work=(async()=>{try {
+          const response=await page.send('Network.getResponseBody',{requestId:event.requestId});
+          if(response.base64Encoded || typeof response.body!=='string' || response.body.length>4*1024*1024)return;
+          const data=JSON.parse(response.body);
+          if(!Array.isArray(data.aweme_list))return;
+          for(const item of data.aweme_list) {
+            if(item && item.author && item.author.sec_uid===userId && /^\d{5,25}$/.test(String(item.aweme_id)) && !ids.includes(String(item.aweme_id))) ids.push(String(item.aweme_id));
+          }
+        } catch (_) { /* Missing or malformed page data is not a verified list. */ }})();
+        pending.add(work); work.finally(()=>pending.delete(work));
+      });
+      await page.navigate(canonical);
+      const deadline=now()+25000;
+      let stable=0,last=0;
+      while(now()<deadline && ids.length<end) {
+        check(signal); await wait(1000,signal); check(signal);
+        if(pending.size)await Promise.all([...pending]);
+        if(ids.length===last)stable++; else {stable=0;last=ids.length;}
+        if(stable>=8)break;
+        try { await page.evaluate(`(()=>{if(location.origin!==${JSON.stringify('https://www.douyin.com')}||location.pathname!==${JSON.stringify('/user/'+userId)})return;window.scrollTo(0,document.documentElement.scrollHeight);for(const e of document.querySelectorAll('main,[role=main]'))e.scrollTop=e.scrollHeight;})()`); } catch (_) { /* Navigation may still be in progress. */ }
+      }
+      check(signal);
+      if(!ids.length)throw failure('PROFILE_UNAVAILABLE','未能获取该用户的作品列表。请确认主页公开，必要时打开抖音登录并关闭窗口后重试。');
+      return ids.slice(start-1,end).map(id=>`https://www.douyin.com/video/${id}`);
+    } catch(error) { throw publicError(error,signal); }
+    finally { if(signal)signal.removeEventListener('abort',abort); try { await finish(token); } catch { throw publicError({code:'CLEANUP'}); } }
+  }
   async function openLogin() {
     const token=acquire('login');
     try {
@@ -113,7 +187,7 @@ function createTransientResolver({ dataDirectory, parser, engineFinder = findEng
       await page.navigate(lastTarget);
       // Explicit login is the only headed operation. Closing its window ends the
       // owned process. The bounded observer unlocks the profile after confirmed exit.
-      token.done=(async()=>{try{await browser.waitForExit();}finally{await finish(token);}})();
+      token.done=(async()=>{try{await Promise.race([browser.waitForExit(),page.waitForClose()]);}finally{await finish(token);}})();
       token.done.catch(()=>{});
       return {opened:true,closeBeforeParse:true};
     } catch(error) {
@@ -130,6 +204,6 @@ function createTransientResolver({ dataDirectory, parser, engineFinder = findEng
     if(current && current.browser)void current.browser.close().catch(()=>{});
     return complete;
   }
-  return Object.freeze({available,resolve,openLogin,setTarget,dispose});
+  return Object.freeze({available,resolve,profileVideos,openLogin,setTarget,dispose});
 }
-module.exports={createTransientResolver,findEngine};
+module.exports={createTransientResolver,findEngine,profileInput};

@@ -20,7 +20,7 @@
     const dataDirectory = path.join(hostPath('userData', path.join(os.homedir(), '.config')), 'shiying-douyin-plugin');
     const store = createStore(dataDirectory);
     let browserInstance = createTransientResolver({ dataDirectory, parser });
-    const browser = Object.freeze({ available: (...args) => browserInstance.available(...args), resolve: (...args) => browserInstance.resolve(...args), openLogin: (...args) => browserInstance.openLogin(...args), setTarget: (...args) => browserInstance.setTarget(...args), dispose: (...args) => browserInstance.dispose(...args) });
+    const browser = Object.freeze({ available: (...args) => browserInstance.available(...args), resolve: (...args) => browserInstance.resolve(...args), profileVideos: (...args) => browserInstance.profileVideos(...args), openLogin: (...args) => browserInstance.openLogin(...args), setTarget: (...args) => browserInstance.setTarget(...args), dispose: (...args) => browserInstance.dispose(...args) });
     const service = createService({ host, clipboard, store, parser, browser, downloader: createDownloader(),
       defaultDirectory: path.join(hostPath('downloads', path.join(os.homedir(), 'Downloads')), '拾影'), version: '0.2.0' });
     // Neither transport injection nor arbitrary file/network access crosses this bridge.

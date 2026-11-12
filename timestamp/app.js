@@ -86,6 +86,7 @@ function openPicker() {
   if (dateValue) { const [date, time] = dateValue.split('T'), [year, month, day] = date.split('-').map(Number), [hour, minute, second] = time.split(':').map(Number); draft = { year, month, day, hour, minute, second }; }
   else draft = nowDraft();
   renderCalendar(); $('date-picker').hidden = false; $('date').setAttribute('aria-expanded', 'true');
+  for (const id of ['hours', 'minutes', 'seconds']) $(id).selectedOptions[0]?.scrollIntoView({ block: 'nearest' });
 }
 for (const [id, max, field] of [['hours', 23, 'hour'], ['minutes', 59, 'minute'], ['seconds', 59, 'second']]) {
   for (let n = 0; n <= max; n++) { const option = document.createElement('option'); option.value = option.textContent = pad(n); $(id).append(option); }

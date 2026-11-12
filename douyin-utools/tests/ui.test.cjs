@@ -68,6 +68,7 @@ async function createUI(options = {}) {
   const implementations = {
     bootstrap: async () => ({ capabilities: { host: true, browser: true }, settings: { outputDir: path.resolve('fixture-downloads') }, history: [], version: 'test' }),
     resolve: async () => ({ ...video }),
+    profileVideos: async () => ['https://www.douyin.com/video/123'],
     download: async () => ({ ...saved }),
     cancel: async () => undefined,
     getHistory: async () => [],
@@ -302,4 +303,55 @@ test('stopping a batch prevents the next download', async () => {
   assert.equal(ui.calls.resolve.length, 1);
   assert.equal(ui.calls.download.length, 0);
   assert.match(ui.node('status-message').textContent, /已停止/);
+});
+
+test('profile download retrieves the requested list then downloads it sequentially', async () => {
+  const ui = await createUI();
+  await ui.node('mode-profile').emit('click');
+  ui.node('profile-input').value = 'https://v.douyin.com/profile/';
+  ui.node('profile-start-index').value = '11';
+  ui.node('profile-end-index').value = '12';
+  await ui.node('profile-form').emit('submit');
+  assert.deepEqual(ui.calls.profileVideos[0], ['https://v.douyin.com/profile/', 11, 12]);
+  assert.equal(ui.calls.resolve.length, 1);
+  assert.equal(ui.calls.download.length, 1);
+  assert.equal(ui.node('batch-results').children[0].value, 11);
+  assert.match(ui.node('status-message').textContent, /成功保存 1 \/ 2.*仅获取到 1 条/);
+});
+
+test('profile download rejects invalid quantities before contacting host', async () => {
+  const ui = await createUI();
+  ui.node('profile-input').value = 'https://v.douyin.com/profile/';
+  ui.node('profile-start-index').value = '1';
+  ui.node('profile-end-index').value = '101';
+  await ui.node('profile-form').emit('submit');
+  assert.equal(ui.calls.profileVideos.length, 0);
+  assert.match(ui.node('profile-error').textContent, /最多 100 条/);
+});
+
+test('stopping while reading a profile never starts video downloads', async () => {
+  const listing = deferred();
+  const ui = await createUI({ bridge: { profileVideos: () => listing.promise } });
+  ui.node('profile-input').value = 'https://v.douyin.com/profile/';
+  ui.node('profile-start-index').value = '1';
+  ui.node('profile-end-index').value = '2';
+  const pending = ui.node('profile-form').emit('submit');
+  await flush();
+  await ui.node('cancel-button').emit('click');
+  listing.resolve(['https://www.douyin.com/video/123']);
+  await pending;
+  assert.equal(ui.calls.resolve.length, 0);
+  assert.equal(ui.calls.download.length, 0);
+  assert.match(ui.node('status-message').textContent, /已停止/);
+});
+
+test('profile mode keyboard shortcut starts the profile flow', async () => {
+  const ui = await createUI();
+  await ui.node('mode-profile').emit('click');
+  ui.node('profile-input').value = 'https://v.douyin.com/profile/';
+  ui.node('profile-start-index').value = '1';
+  ui.node('profile-end-index').value = '1';
+  await ui.document.emit('keydown', { ctrlKey: true, key: 'Enter' });
+  assert.equal(ui.calls.profileVideos.length, 1);
+  assert.equal(ui.calls.resolve.length, 1);
 });

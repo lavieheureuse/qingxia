@@ -14,6 +14,7 @@
   const state = { initialized: false, host: false, browser: false, phase: 'idle', video: null, result: null, history: [], directory: '', message: '', progress: null, cancelling: false, action: null, resolvedInput: '', sequence: 0 };
   let toastTimer;
   let batch = null;
+  let profileMode = false;
 
   function text(value, max = 1000) {
     return typeof value === 'string' ? value.slice(0, max) : '';
@@ -87,7 +88,7 @@
   }
   function renderVideo() {
     const video = state.video;
-    $('empty-preview').hidden = !!video;
+    $('empty-preview').hidden = !!video || profileMode;
     $('video-preview').hidden = !video;
     if (!video) return;
     $('video-title').textContent = text(video.title, 1000) || '未提供视频标题';
@@ -150,6 +151,16 @@
     $('host-notice').hidden = designPreview || !state.initialized || (state.host && state.browser);
     $('host-notice-text').textContent = designPreview ? '当前为界面设计稿，下载功能将在确认后接入。' : state.host ? '独立引擎不可用，仍可尝试公开链接。请更新 uTools 并安装 Chrome 或 Edge。' : '当前仅为界面预览。请在 uTools 中运行，才能解析与下载视频。';
     $('share-input').disabled = running;
+    $('mode-video').disabled = running;
+    $('mode-profile').disabled = running;
+    $('profile-input').disabled = running;
+    $('profile-start-index').disabled = running;
+    $('profile-end-index').disabled = running;
+    $('profile-start').disabled = running || !canCall('profileVideos') || !canCall('resolve') || !canCall('download') || !state.browser || !$('profile-input').value.trim();
+    $('resolve-form').hidden = profileMode;
+    $('profile-form').hidden = !profileMode;
+    for (const [id, selected] of [['mode-video', !profileMode], ['mode-profile', profileMode]]) { $(id).classList.toggle('is-selected', selected); $(id).setAttribute('aria-pressed', String(selected)); }
+    $('preview-heading').textContent = profileMode ? '下载任务' : '视频预览';
     $('clear-input').disabled = running || !$('share-input').value;
     $('paste-button').disabled = !canCall('readClipboard') || running || state.action === 'paste';
     $('paste-button').title = state.host ? '从剪贴板填入分享文本，不会自动解析' : '请在 uTools 中使用剪贴板';
@@ -327,6 +338,31 @@
     const links = [...new Set(($('share-input').value.match(/https?:\/\/[^\s<>"'`]+/gi) || []).map(link => link.replace(/[，。！？、；：）》】」』“”‘’.,!;:)\]}]+$/u, '')))];
     if (!links.length || links.length > 100) { setInputError('请输入 1 至 100 个带 http 或 https 的作品链接。'); return; }
     setInputError('');
+    await runBatch(links);
+  }
+  async function downloadProfile(event) {
+    event.preventDefault();
+    if (!canCall('profileVideos') || !canCall('resolve') || !canCall('download') || busy()) return;
+    const input = $('profile-input').value.trim(), start = Number($('profile-start-index').value), end = Number($('profile-end-index').value);
+    if (!input || !Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > 1000 || end - start + 1 > 100) {
+      $('profile-error').textContent = '请填写主页链接及有效范围：序号为 1 至 1000，单次最多 100 条。'; $('profile-error').hidden = false; return;
+    }
+    $('profile-error').hidden = true;
+    batch = { stopped: false };
+    state.video = null; state.result = null; state.progress = null; state.phase = 'resolving';
+    state.message = '正在读取用户主页的作品列表…'; $('batch-results').replaceChildren(); $('batch-results').hidden = true; render();
+    try {
+      const links = await bridge.profileVideos(input, start, end);
+      if (batch.stopped) { batch = null; state.cancelling = false; state.phase = 'cancelled'; state.message = '任务已停止。'; render(); return; }
+      if (!Array.isArray(links) || !links.length) throw new Error('没有获取到所选范围的作品，请检查范围或稍后重试。');
+      await runBatch(links, end - start + 1, start);
+    } catch (error) {
+      const stopped = batch && batch.stopped;
+      batch = null; state.cancelling = false; state.phase = stopped ? 'cancelled' : 'error';
+      state.message = stopped ? '任务已停止。' : messageFrom(error, '无法读取用户主页作品。'); render();
+    }
+  }
+  async function runBatch(links, requested = links.length, start = 1) {
     batch = { stopped: false };
     state.video = null; state.result = null; state.progress = null;
     const list = $('batch-results');
@@ -334,27 +370,28 @@
     let success = 0;
     for (let i = 0; i < links.length && !batch.stopped; i += 1) {
       const row = document.createElement('li');
-      row.textContent = `${i + 1}. 正在解析：${links[i]}`;
+      row.value = start + i;
+      row.textContent = `正在解析：${links[i]}`;
       list.append(row);
       state.phase = 'resolving'; state.message = `正在处理第 ${i + 1} / ${links.length} 个视频。`; render();
       try {
         const video = await bridge.resolve(links[i]);
-        if (batch.stopped) { row.textContent = `${i + 1}. 已停止：${links[i]}`; break; }
+        if (batch.stopped) { row.textContent = `已停止：${links[i]}`; break; }
         if (!video || !video.id) throw new Error('没有取得视频信息。');
-        row.textContent = `${i + 1}. 正在下载：${text(video.title) || links[i]}`;
+        row.textContent = `正在下载：${text(video.title) || links[i]}`;
         state.phase = 'downloading'; render();
         const result = await bridge.download(video.id);
         if (!result || !text(result.path, 2000)) throw new Error('未返回保存路径，请查看下载记录。');
         success += 1;
-        row.textContent = `${i + 1}. 已保存：${text(video.title) || links[i]} — ${result.path}${result.warning ? ` ${result.warning}` : ''}`;
+        row.textContent = `已保存：${text(video.title) || links[i]} — ${result.path}${result.warning ? ` ${result.warning}` : ''}`;
       } catch (error) {
-        row.textContent = `${i + 1}. ${batch.stopped ? '已停止' : '失败'}：${links[i]} — ${messageFrom(error)}`;
+        row.textContent = `${batch.stopped ? '已停止' : '失败'}：${links[i]} — ${messageFrom(error)}`;
       }
     }
     const stopped = batch.stopped;
     batch = null; state.cancelling = false; state.progress = null;
-    state.phase = stopped ? 'cancelled' : success === links.length ? 'complete' : 'error';
-    state.message = `${stopped ? '已停止。' : '批量任务结束。'}成功保存 ${success} / ${links.length} 个视频，详情见下方。`;
+    state.phase = stopped ? 'cancelled' : success === requested ? 'complete' : 'error';
+    state.message = `${stopped ? '已停止。' : '批量任务结束。'}成功保存 ${success} / ${requested} 个视频${links.length < requested ? `；主页仅获取到 ${links.length} 条` : ''}，详情见下方。`;
     render(); refreshHistory();
   }
   async function cancelTask() {
@@ -409,6 +446,9 @@
   }
 
   $('resolve-form').addEventListener('submit', resolveVideo);
+  $('profile-form').addEventListener('submit', downloadProfile);
+  $('profile-input').addEventListener('input', () => { $('profile-error').hidden = true; render(); });
+  for (const [id, selected] of [['mode-video', false], ['mode-profile', true]]) $(id).addEventListener('click', () => { if (busy()) return; profileMode = selected; inputChanged(); });
   $('share-input').addEventListener('input', inputChanged);
   $('share-input').addEventListener('blur', () => { if (state.host && !$('share-input').value.trim() && $('share-input').value) setInputError('文本中没有视频链接，请重新粘贴分享内容。'); });
   $('clear-input').addEventListener('click', () => { $('share-input').value = ''; inputChanged(); $('share-input').focus(); });
@@ -463,7 +503,7 @@
     switchTab(event.key === 'Home' ? 'download' : event.key === 'End' ? 'history' : selected ? 'history' : 'download', true);
   });
   document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !$('clear-history-dialog').open) { event.preventDefault(); switchTab('download'); resolveVideo(); }
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !$('clear-history-dialog').open) { event.preventDefault(); switchTab('download'); if (profileMode) downloadProfile(event); else resolveVideo(); }
   });
   window.addEventListener('douyin:input', (event) => {
     if (typeof event.detail !== 'string') return;

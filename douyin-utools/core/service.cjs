@@ -80,6 +80,10 @@ function createService({ store, downloader, parser, browser, host, clipboard, de
       assertHost();
       return { settings: settings(), history: store.listHistory(), capabilities: { host: isHost, browser: !!(browser && browser.available()) }, version };
     },
+    async profileVideos(input, start, end) {
+      if (!browser || !browser.available() || typeof browser.profileVideos !== 'function') throw fail('BROWSER_UNAVAILABLE','用户主页下载需要可用的独立浏览器引擎。');
+      return task('resolving', '正在读取用户主页作品列表…', signal => browser.profileVideos(input, start, end, { signal }));
+    },
     async resolve(input) {
       if (typeof input !== 'string' || input.length > 20000) throw fail('INVALID_INPUT', '请输入不超过 20000 字符的抖音视频分享文本。');
       const requested = parser.parseShareInput(input); // Validate before any HTTP request or opening a window.

@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
-const apiNames = ['bootstrap', 'resolve', 'download', 'cancel', 'chooseDirectory', 'getHistory', 'clearHistory', 'openFile', 'revealFile', 'openLogin', 'readClipboard', 'onState'];
+const apiNames = ['bootstrap', 'resolve', 'profileVideos', 'download', 'cancel', 'chooseDirectory', 'getHistory', 'clearHistory', 'openFile', 'revealFile', 'openLogin', 'readClipboard', 'onState'];
 const share = '视频分享 https://www.douyin.com/video/123';
 
 function eventTarget() {
@@ -29,11 +29,11 @@ function eventTarget() {
 }
 
 function loadPreload(options = {}) {
-  const calls = { require: [], parse: [], store: [], browser: [], service: [], downloadFactory: 0, dispose: 0, clipboard: 0, heights: [], legacyHeights: [], enter: [], out: [], exit: [], exitCancelled: [], input: [] };
+  const calls = { require: [], parse: [], store: [], browser: [], profileVideos: [], service: [], downloadFactory: 0, dispose: 0, clipboard: 0, heights: [], legacyHeights: [], enter: [], out: [], exit: [], exitCancelled: [], input: [] };
   const apiCalls = Object.fromEntries(apiNames.map(name => [name, []]));
   const store = Object.freeze({ marker: 'in-memory store' });
   const downloader = Object.freeze({ marker: 'in-memory downloader' });
-  const browser = Object.freeze({ marker: 'in-memory browser', dispose() { calls.dispose += 1; return true; } });
+  const browser = Object.freeze({ marker: 'in-memory browser', profileVideos(...args) { calls.profileVideos.push(args); return ['video']; }, dispose() { calls.dispose += 1; return true; } });
   const clipboard = Object.freeze({ readText() { calls.clipboard += 1; throw new Error('Tests must never read clipboard'); } });
   const parser = Object.freeze({
     parseShareInput(input) {
@@ -109,7 +109,7 @@ test('preload exposes only the narrow service, not Node/core capabilities', () =
   const dependencies = fixture.calls.service[0];
   assert.equal(dependencies.host, fixture.host);
   assert.equal(dependencies.store, fixture.store);
-  assert.deepEqual(Object.keys(dependencies.browser).sort(), ['available', 'dispose', 'openLogin', 'resolve', 'setTarget']);
+  assert.deepEqual(Object.keys(dependencies.browser).sort(), ['available', 'dispose', 'openLogin', 'profileVideos', 'resolve', 'setTarget']);
   assert.equal(dependencies.downloader, fixture.downloader);
   assert.equal(dependencies.clipboard, fixture.clipboard);
   assert.equal(dependencies.parser, fixture.parser);
@@ -120,6 +120,17 @@ test('preload exposes only the narrow service, not Node/core capabilities', () =
   assert.equal(dependencies.version, '0.2.0');
   assert.ok(!fixture.calls.require.includes('./core/browser.cjs'));
   assert.equal(fixture.calls.clipboard, 0);
+});
+
+test('preload forwards profile collection to the current browser instance', () => {
+  const fixture = loadPreload();
+  const signal = new AbortController().signal;
+  const result = fixture.calls.service[0].browser.profileVideos('https://v.douyin.com/example/', 11, 20, { signal });
+  assert.deepEqual(result, ['video']);
+  assert.equal(fixture.calls.profileVideos[0][0], 'https://v.douyin.com/example/');
+  assert.equal(fixture.calls.profileVideos[0][1], 11);
+  assert.equal(fixture.calls.profileVideos[0][2], 20);
+  assert.equal(fixture.calls.profileVideos[0][3].signal, signal);
 });
 
 test('cancelled host exit recreates the browser after cleaning up', async () => {

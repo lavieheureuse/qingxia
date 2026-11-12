@@ -48,11 +48,20 @@
     <main id="main" tabindex="-1">
       <div id="host-notice" class="notice" role="note" hidden><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><p id="host-notice-text"></p></div>
       <section id="download-panel" class="view" role="tabpanel" aria-labelledby="download-tab">
+        <div class="mode-switch" aria-label="下载方式"><button id="mode-video" class="button button-secondary is-selected" type="button" aria-pressed="true">作品链接</button><button id="mode-profile" class="button button-secondary" type="button" aria-pressed="false">用户主页</button></div>
         <form id="resolve-form" class="surface composer" novalidate>
           <div class="section-heading"><label for="share-input">视频链接或分享文本 <span class="required-label">必填</span></label><button id="clear-input" class="text-button" type="button" disabled>清空</button></div>
           <textarea id="share-input" rows="3" maxlength="20000" placeholder="粘贴抖音视频链接或分享文本；批量下载可粘贴多个链接" aria-describedby="input-hint input-error" spellcheck="false"></textarea>
           <p id="input-error" class="field-error" hidden></p>
           <div class="composer-actions"><p id="input-hint" class="helper">单条可预览；多个链接可批量下载。</p><div class="button-group"><button id="paste-button" class="button button-secondary" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>粘贴</button><button id="batch-button" class="button button-secondary" type="button" disabled>批量下载</button><button id="resolve-button" class="button button-primary" type="submit" disabled><span id="resolve-label">解析视频</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
+        </form>
+        <form id="profile-form" class="surface composer profile-form" hidden novalidate>
+          <div class="section-heading"><h2>按用户下载</h2><span class="helper">下载指定用户的公开作品</span></div>
+          <label for="profile-input">用户主页分享链接</label>
+          <textarea id="profile-input" rows="2" maxlength="20000" placeholder="粘贴抖音用户主页链接或分享文本" aria-describedby="profile-error"></textarea>
+          <p id="profile-error" class="field-error" role="alert" hidden></p>
+          <div class="profile-count"><label for="profile-start-index">下载范围</label><span>第</span><input id="profile-start-index" type="number" min="1" max="1000" step="1" value="1" aria-label="起始序号"><span>条至第</span><input id="profile-end-index" type="number" min="1" max="1000" step="1" value="10" aria-label="结束序号"><span>条</span><span class="helper">按主页当前顺序，单次最多 100 条</span></div>
+          <button id="profile-start" class="button button-primary profile-start" type="submit" disabled><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>开始下载</button>
         </form>
 
         <section class="surface preview-panel" aria-labelledby="preview-heading">

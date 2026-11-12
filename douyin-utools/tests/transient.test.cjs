@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 const {setImmediate:nextTurn}=require('node:timers/promises');
 const parser=require('../core/parse.cjs');
-const {createTransientResolver,findEngine}=require('../core/transient.cjs');
+const {createTransientResolver,findEngine,profileInput}=require('../core/transient.cjs');
 const ID='7702774431202267850';
 const OTHER='7702774431202267851';
 const media='https://v.example.douyinvod.com/test.mp4';
@@ -28,7 +28,7 @@ function fixture(options={}) {
           const browser={
             close(){if(!closed){records.close++;closed=(options.close?options.close():Promise.resolve()).then(()=>{owned.delete(browser);});}return closed;},
             terminateSync(){records.terminated++;if(!options.incompleteSync)owned.delete(browser);},waitForExit(){return ended;},
-            async createTarget(){return {navigate:async url=>{records.navigations.push(url);},evaluate:async()=>{
+            async createTarget(){const listeners={};return {waitForClose:()=>options.windowClosed || ended,on:(name,fn)=>{listeners[name]=fn;},send:async()=>({body:JSON.stringify(options.profileResponse),base64Encoded:false}),navigate:async url=>{records.navigations.push(url);if(options.profileResponse){listeners['Network.responseReceived']({requestId:'1',response:{url:'https://www.douyin.com/aweme/v1/web/aweme/post/?sec_user_id=abcde',status:200}});listeners['Network.loadingFinished']({requestId:'1'});}},evaluate:async()=>{
               records.evaluations++;if(options.evaluate)return options.evaluate(records.evaluations);
               return {value:options.snapshots?options.snapshots[Math.min(records.evaluations-1,options.snapshots.length-1)]:snapshot()};
             }};}
@@ -42,6 +42,26 @@ function fixture(options={}) {
     }});
   return {resolver,records,exit};
 }
+test('profile input accepts only one official profile or short link',()=>{
+  assert.equal(profileInput('分享 https://www.iesdouyin.com/share/user/abcde?x=1'), 'https://www.douyin.com/user/abcde');
+  assert.equal(profileInput('分享 https://v.douyin.com/abcde/'), 'https://v.douyin.com/abcde/');
+  for(const bad of ['https://evil.com/user/abcde','https://www.douyin.com/video/12345','https://v.douyin.com/a/ https://v.douyin.com/b/']) assert.throws(()=>profileInput(bad),{code:'INVALID_PROFILE'});
+});
+test('profile collection accepts only works with the requested author and closes the engine',async()=>{
+  const {resolver,records}=fixture({profileResponse:{aweme_list:[{aweme_id:ID,author:{sec_uid:'abcde'}},{aweme_id:OTHER,author:{sec_uid:'different'}}]}});
+  assert.deepEqual(await resolver.profileVideos('https://www.douyin.com/user/abcde',1,2),[`https://www.douyin.com/video/${ID}`]);
+  assert.equal(records.close,1);
+});
+test('profile collection fails safely if no verified works exist',async()=>{
+  const {resolver,records}=fixture({profileResponse:{aweme_list:[{aweme_id:ID,author:{sec_uid:'different'}}]}});
+  await assert.rejects(resolver.profileVideos('https://www.douyin.com/user/abcde',1,2),{code:'PROFILE_UNAVAILABLE'});
+  assert.equal(records.close,1);
+});
+test('profile collection selects inclusive positions and validates range',async()=>{
+  const {resolver}=fixture({profileResponse:{aweme_list:[{aweme_id:ID,author:{sec_uid:'abcde'}},{aweme_id:OTHER,author:{sec_uid:'abcde'}}]}});
+  assert.deepEqual(await resolver.profileVideos('https://www.douyin.com/user/abcde',2,2),[`https://www.douyin.com/video/${OTHER}`]);
+  await assert.rejects(resolver.profileVideos('https://www.douyin.com/user/abcde',2,102),{code:'INVALID_PROFILE'});
+});
 test('fresh transient resolution validates exact official media and closes before returning',async()=>{
   const {resolver,records}=fixture();const result=await resolver.resolve(`https://www.douyin.com/video/${ID}`);
   assert.equal(result.id,ID);assert.ok(result.urls.every(parser.isMediaUrl));assert.equal(records.close,1);
@@ -97,6 +117,12 @@ test('explicit login is headed, blocks parsing only while window lives, then per
   const {resolver,records,exit}=fixture();const opened=await resolver.openLogin();assert.equal(opened.closeBeforeParse,true);assert.equal(records.launches[0].headless,false);
   await assert.rejects(resolver.resolve(`https://www.douyin.com/video/${ID}`),{code:'BUSY'});exit();await nextTurn();
   assert.equal((await resolver.resolve(`https://www.douyin.com/video/${ID}`)).id,ID);assert.equal(records.launches[1].headless,true);assert.equal(records.close,2);
+});
+test('closing the login page releases the owned browser even if its process remains alive',async()=>{
+  let closeWindow;const windowClosed=new Promise(resolve=>{closeWindow=resolve;});
+  const {resolver,records}=fixture({windowClosed});await resolver.openLogin();closeWindow();await nextTurn();
+  assert.equal(records.close,1);
+  assert.equal((await resolver.resolve(`https://www.douyin.com/video/${ID}`)).id,ID);
 });
 test('missing engine has explicit installation instruction, no raw errors',async()=>{
   const {resolver,records}=fixture({noEngine:true});await assert.rejects(resolver.resolve(`https://www.douyin.com/video/${ID}`),{code:'ENGINE_NOT_FOUND'});assert.equal(records.launches.length,0);
