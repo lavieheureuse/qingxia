@@ -158,7 +158,7 @@ function createService(options) {
   const store = createStore(dataDir);
   const dirs = {
     data: dataDir,
-    run: path.join(dataDir, 'run'),
+    run: typeof opts.runDir === 'string' && opts.runDir.trim() ? path.resolve(opts.runDir) : path.join(dataDir, 'run'),
     bin: typeof opts.binDir === 'string' && opts.binDir.trim() ? path.resolve(opts.binDir) : path.join(dataDir, 'bin'),
     logs: path.join(dataDir, 'logs'),
   };
@@ -821,10 +821,19 @@ function createService(options) {
 
   async function doBootstrap() {
     assertNotDisposed();
+    const oldRun = path.join(dataDir, 'run');
+    if (dirs.run !== oldRun && !fs.existsSync(dirs.run) && fs.existsSync(oldRun)) {
+      fs.cpSync(oldRun, dirs.run, { recursive: true, force: false, errorOnExist: true });
+    }
     fs.mkdirSync(dirs.run, { recursive: true });
     fs.mkdirSync(dirs.bin, { recursive: true });
     fs.mkdirSync(dirs.logs, { recursive: true });
     settings = store.read();
+    const oldBinary = settings.frpc.source === 'downloaded' && settings.frpc.path;
+    const defaultBinary = path.join(dirs.bin, 'frpc.exe');
+    if (oldBinary && path.resolve(oldBinary) !== path.resolve(defaultBinary) && isFile(oldBinary) && !fs.existsSync(defaultBinary)) {
+      fs.copyFileSync(oldBinary, defaultBinary, fs.constants.COPYFILE_EXCL);
+    }
     registerSecret(settings.connection.pcToken);
     autoSync = { enabled: settings.autoSync.enabled || settings.autoSync.startOnLaunch, intervalSec: settings.autoSync.intervalSec, startOnLaunch: settings.autoSync.startOnLaunch, nextAt: null };
     await initBinary();

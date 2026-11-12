@@ -59,15 +59,10 @@
 
 ```
 settings.json          连接配置 / frpc 路径 / 自动同步设置（pcToken 仅混淆保存，不是加密）
-run/frpc.toml          服务器下发的完整配置（INI 内容）
-run/frpc.toml.bak      上一次可用配置
-run/frpc.toml.version  已应用版本号
-run/frpc.pid           运行中的 frpc 进程信息（用于窗口重开后接管）
-run/frpc.log           frpc 输出
 logs/sync.log          插件的同步日志
 ```
 
-下载的 frpc 默认位于插件目录的 `bin/frpc.exe`；已有的旧下载路径和手动指定路径仍可使用。
+生效配置位于插件目录的 `run/frpc.toml`，备份、版本记录、进程信息和 frpc 日志也位于 `run` 中。下载的 frpc 默认位于插件目录的 `bin/frpc.exe`。首次切换时复制旧目录中的运行文件和已下载程序，旧文件保留；手动指定的程序路径不变。
 
 ## 安全
 

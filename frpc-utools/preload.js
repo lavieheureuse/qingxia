@@ -50,6 +50,7 @@
     service = createService({
       dataDir,
       binDir: path.join(__dirname, 'bin'),
+      runDir: path.join(__dirname, 'run'),
       host,
       appVersion,
       platform: process.platform,

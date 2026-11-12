@@ -283,8 +283,9 @@ test('默认 frpc 路径跟随插件目录，兼容旧下载路径和自定义�
   fs.writeFileSync(legacy, 'old');
   settings.frpc = { path: legacy, version: '0.71.1', source: 'downloaded' };
   store.write(settings);
-  assert.equal((await boot()).path, legacy);
-  fs.mkdirSync(binDir, { recursive: true });
+  assert.equal((await boot()).path, current);
+  assert.equal(fs.readFileSync(current, 'utf8'), 'old');
+  assert.equal(fs.readFileSync(legacy, 'utf8'), 'old');
   fs.writeFileSync(current, 'new');
   assert.equal((await boot()).path, current);
   fs.writeFileSync(custom, 'custom');
@@ -292,6 +293,28 @@ test('默认 frpc 路径跟随插件目录，兼容旧下载路径和自定义�
   saved.frpc = { path: custom, version: '0.71.1', source: 'custom' };
   store.write(saved);
   assert.equal((await boot()).path, custom);
+});
+
+test('生效配置迁移到插件目录，不覆盖已有配置', async (t) => {
+  const dataDir = tempDir(t);
+  const runDir = path.join(tempDir(t), 'run');
+  const legacyRun = path.join(dataDir, 'run');
+  fs.mkdirSync(legacyRun, { recursive: true });
+  fs.writeFileSync(path.join(legacyRun, 'frpc.toml'), iniConfig());
+  fs.writeFileSync(path.join(legacyRun, 'frpc.toml.version'), '12');
+  const boot = async () => {
+    const service = createService({ dataDir, runDir });
+    const state = await service.bootstrap();
+    service.dispose();
+    return state;
+  };
+  const state = await boot();
+  assert.equal(state.applied.configPath, path.join(runDir, 'frpc.toml'));
+  assert.equal(state.applied.version, 12);
+  fs.writeFileSync(path.join(runDir, 'frpc.toml'), 'new config');
+  await boot();
+  assert.equal(fs.readFileSync(path.join(runDir, 'frpc.toml'), 'utf8'), 'new config');
+  assert.equal(fs.readFileSync(path.join(legacyRun, 'frpc.toml'), 'utf8'), iniConfig());
 });
 
 test('saveConnection() validates, persists obfuscated token and updates phase', async (t) => {

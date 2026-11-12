@@ -166,6 +166,30 @@ let mainWindow, panelWindow, tray;
 function showMain() { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } }
 const windows = new Map();
 const pluginViews = new Map();
+const pluginDataRoots = new Map();
+const legacyPluginData = new Map([
+  ['frpc\0frpc', 'frpc-utools'],
+  ['hosts-editor\0Hosts 快速编辑', 'hosts-editor'],
+  ['password-box\0密码盒', 'password-box'],
+  ['download\0拾影', 'shiying-douyin-plugin'],
+  ['application-proxy\0应用代理', 'application-proxy']
+]);
+function preparePluginData(plugin) {
+  const name = legacyPluginData.get(`${plugin.code}\0${plugin.name}`);
+  if (!name) return '';
+  const root = path.join(data, 'plugin-data');
+  const oldDir = path.join(data, name), newDir = path.join(root, name);
+  try {
+    if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('插件数据目录不能是链接');
+    if (fs.existsSync(oldDir)) {
+      if (fs.lstatSync(oldDir).isSymbolicLink()) throw new Error('原插件数据目录不能是链接');
+      if (fs.existsSync(newDir)) throw new Error('新旧插件数据目录同时存在，请先备份并检查后再处理');
+      fs.mkdirSync(root, { recursive: true });
+      fs.renameSync(oldDir, newDir);
+    }
+  } catch (error) { throw new Error(`无法迁移${plugin.name}的数据：${error.message}。原有数据未被覆盖。`); }
+  return root;
+}
 const pluginMenus = new Map();
 const pluginDialogs = new Set();
 const pluginOperations = new Set();
@@ -265,12 +289,13 @@ function handleGlobalMouseDown(event) {
 function openPlugin(dir, background = false) {
   const plugin = plugins().find(p => p.dir === dir); if (!plugin) throw new Error('工具不存在');
   if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
+  const pluginDataRoot = preparePluginData(plugin);
   const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, show: !background, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
   const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
   view.webContents.on('did-finish-load', () => { view.webContents.insertCSS('::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#b8c8b9;border:2px solid transparent;border-radius:8px;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:#87a48c;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-corner{background:transparent}').catch(error => console.error('设置滚动条样式失败:', error)); });
   const contents = view.webContents;
   win.setMenu(null);
-  windows.set(dir, win); pluginViews.set(contents.id, win);
+  windows.set(dir, win); pluginViews.set(contents.id, win); if (pluginDataRoot) pluginDataRoots.set(contents.id, pluginDataRoot);
   win.setBrowserView(view);
   const layout = () => { const [width, height] = win.getContentSize(); view.setBounds({ x: 0, y: 36, width, height: Math.max(0, height - 36) }); const menu = pluginMenus.get(dir); if (menu) menu.setBounds({ x: Math.max(0, width - 432), y: 36, width: 286, height: 208 }); };
   layout(); win.on('resize', layout);
@@ -287,7 +312,7 @@ function openPlugin(dir, background = false) {
     }).finally(() => { closing = false; });
   });
   contents.on('focus', () => { const menu = pluginMenus.get(dir); if (menu && win.getBrowserViews().includes(menu)) win.removeBrowserView(menu); });
-  win.on('closed', () => { const menu = pluginMenus.get(dir); pluginMenus.delete(dir); if (menu && !menu.webContents.isDestroyed()) menu.webContents.close(); windows.delete(dir); pluginViews.delete(contents.id); pluginExitHandlers.delete(contents.id); pluginOperations.delete(contents.id); pluginDialogs.delete(win); if (!contents.isDestroyed()) contents.close(); });
+  win.on('closed', () => { const menu = pluginMenus.get(dir); pluginMenus.delete(dir); if (menu && !menu.webContents.isDestroyed()) menu.webContents.close(); windows.delete(dir); pluginViews.delete(contents.id); pluginDataRoots.delete(contents.id); pluginExitHandlers.delete(contents.id); pluginOperations.delete(contents.id); pluginDialogs.delete(win); if (!contents.isDestroyed()) contents.close(); });
   contents.on('will-navigate', (event, url) => { if (!url.startsWith('file:')) event.preventDefault(); });
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.loadFile('index.html', { query: { plugin: '1' } });
@@ -304,7 +329,7 @@ app.whenReady().then(async () => {
   tray.setToolTip('轻匣'); tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开轻匣', click: showMain }, { label: '退出', click: () => app.quit() }])); tray.on('click', showMain);
   for (const dir of settings.pluginStartup) {
     if (!settings.plugins.includes(dir)) continue;
-    try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', '有后台插件启动失败，请检查插件文件是否完整。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
+    try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', `后台插件启动失败：${friendlyError(error)}`); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
   }
   try { uIOhook.on('mousedown', handleGlobalMouseDown); uIOhook.start(); } catch (error) { console.error('鼠标快捷面板不可用:', error); const notice = () => mainWindow.webContents.send('notice', '鼠标中键快捷面板暂时不可用，请重启工具箱后重试。'); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
 });
@@ -440,7 +465,7 @@ async function toolboxAction(event, action, value) {
   }
   throw new Error('不支持的操作');
 }
-ipcMain.on('host-path', (e, name) => { e.returnValue = ['userData', 'downloads', 'desktop', 'documents', 'temp'].includes(name) ? app.getPath(name) : ''; });
+ipcMain.on('host-path', (e, name) => { e.returnValue = name === 'pluginData' ? path.join(data, 'plugin-data') : name === 'userData' && pluginDataRoots.has(e.sender.id) ? pluginDataRoots.get(e.sender.id) : ['userData', 'downloads', 'desktop', 'documents', 'temp'].includes(name) ? app.getPath(name) : ''; });
 ipcMain.handle('host-dialog', async (e, options) => { const owner = pluginViews.get(e.sender.id) || BrowserWindow.fromWebContents(e.sender); if (owner) pluginDialogs.add(owner); try { const result = await dialog.showOpenDialog(owner, options); return result.canceled ? undefined : result.filePaths; } finally { if (owner) pluginDialogs.delete(owner); } });
 ipcMain.handle('host-open', (e, p) => shell.openPath(p));
 ipcMain.handle('host-show', (e, p) => shell.showItemInFolder(p));
