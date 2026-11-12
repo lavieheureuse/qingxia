@@ -16,7 +16,10 @@
   const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const quote = s => "'" + String(s).replace(/'/g, "''") + "'";
   const encode = s => Buffer.from(s, 'utf16le').toString('base64');
-  async function powershell(script) { return (await exec(ps, ['-NoProfile','-NonInteractive','-EncodedCommand',encode(script)], {windowsHide:true, timeout:120000})).stdout.trim(); }
+  async function powershell(script) {
+    const wrapped = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new(); try { ${script} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`;
+    return (await exec(ps, ['-NoProfile','-NonInteractive','-OutputFormat','Text','-EncodedCommand',encode(wrapped)], {windowsHide:true, timeout:120000})).stdout.trim();
+  }
   function ensure() { fs.mkdirSync(dir, {recursive:true}); }
   function read(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } }
   function write(file, value) { ensure(); const temp = file + '.' + crypto.randomUUID() + '.tmp'; try { fs.writeFileSync(temp, JSON.stringify(value, null, 2), {encoding:'utf8', flag:'wx'}); fs.renameSync(temp, file); } finally { try { fs.unlinkSync(temp); } catch (_) {} } }
