@@ -254,7 +254,7 @@ test('download() reports percent=-1 when content-length is absent and tries mirr
     onProgress: (item) => progress.push(item),
   });
   assert.equal(calls.length, 4);
-  assert.equal(calls[0], 'http://103.47.80.133/frpc.exe');
+  assert.equal(calls[0], 'https://103.47.80.133/frpc.exe');
   assert.equal(calls[1], binary.buildDownloadUrl('0.71.1', 'amd64'));
   assert.equal(calls[2], 'https://ghproxy.net/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
   assert.equal(calls[3], 'https://gh-proxy.com/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
@@ -273,19 +273,19 @@ test('优先使用直链，版本不匹配时回退到 GitHub', async (t) => {
   const archive = buildZip([{ name: 'frpc.exe', data: 'MZ-github-frpc' }]);
   const run = (selectedVersion, target, arch = 'x64') => binary.download({
     version: selectedVersion, arch, binDir: path.join(dir, target),
-    fetchImpl: async (url) => { calls.push(url); return fakeResponse(url.startsWith('http://') ? direct : archive); },
+    fetchImpl: async (url) => { calls.push(url); return fakeResponse(url === 'https://103.47.80.133/frpc.exe' ? direct : archive); },
     detectVersion: async (file) => fs.readFileSync(file).equals(direct) ? '0.71.1' : selectedVersion,
   });
   const first = await run('0.71.1', 'first');
-  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe']);
+  assert.deepEqual(calls, ['https://103.47.80.133/frpc.exe']);
   assert.deepEqual(fs.readFileSync(first.path), direct);
   calls.length = 0;
   const second = await run('0.72.0', 'second');
-  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.72.0', 'amd64')]);
+  assert.deepEqual(calls, ['https://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.72.0', 'amd64')]);
   assert.equal(fs.readFileSync(second.path, 'utf8'), 'MZ-github-frpc');
   calls.length = 0;
   await run('0.71.1', 'third', 'arm64');
-  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.71.1', 'arm64')]);
+  assert.deepEqual(calls, ['https://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.71.1', 'arm64')]);
 });
 
 test('download() replaces an existing frpc.exe and rejects a zip without frpc.exe', async (t) => {

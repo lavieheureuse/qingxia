@@ -87,7 +87,7 @@ for (const file of ['core/binary.cjs', 'core/service.cjs']) {
   for (const match of text.matchAll(/["'`](https?:\/\/[^"'`\s]+)["'`]/g)) {
     const url = match[1];
     const allowed = /^https:\/\/(?:api\.github\.com|github\.com|ghproxy\.net|gh-proxy\.com)\//.test(url)
-      || url === 'http://103.47.80.133/frpc.exe';
+      || url === 'https://103.47.80.133/frpc.exe';
     if (!allowed) note(`${file} 出现非白名单网络地址：${url}`);
   }
 }

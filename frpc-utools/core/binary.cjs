@@ -14,7 +14,7 @@ const zip = require('./zip.cjs');
 
 const RELEASES_API = 'https://api.github.com/repos/fatedier/frp/releases?per_page=20';
 const RELEASE_DOWNLOAD = 'https://github.com/fatedier/frp/releases/download';
-const DIRECT_DOWNLOAD = 'http://103.47.80.133/frpc.exe';
+const DIRECT_DOWNLOAD = 'https://103.47.80.133/frpc.exe';
 const MIRROR_PREFIXES = ['https://ghproxy.net/', 'https://gh-proxy.com/'];
 const ARCH_MAP = { x64: 'amd64', ia32: '386', arm64: 'arm64' };
 // Fallback list only matters when GitHub is unreachable; keep the recommended
