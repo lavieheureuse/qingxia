@@ -29,7 +29,9 @@ test('first read persists v2 defaults (connection / autoSync)', (t) => {
   const first = store.read();
   assert.equal(first.version, 2);
   assert.equal(first.connection.apiBase, DEFAULT_API_BASE);
-  assert.equal(first.connection.pcId, 'pc-home');
+  assert.match(first.connection.pcId, /^pc-[0-9a-f-]{36}$/);
+  assert.equal(store.read().connection.pcId, first.connection.pcId);
+  assert.notEqual(createStore(tempDir(t)).read().connection.pcId, first.connection.pcId);
   assert.equal(first.connection.pcToken, '');
   assert.equal(first.frpc.path, '');
   assert.equal(first.frpc.source, 'downloaded');
@@ -77,7 +79,7 @@ test('corrupt settings are backed up and replaced by defaults', (t) => {
   const store = createStore(dir);
   fs.writeFileSync(store.settingsPath, '{ not json ', 'utf8');
   const recovered = store.read();
-  assert.equal(recovered.connection.pcId, 'pc-home');
+  assert.match(recovered.connection.pcId, /^pc-[0-9a-f-]{36}$/);
   const backups = fs.readdirSync(dir).filter((name) => name.startsWith('settings.json.broken-'));
   assert.equal(backups.length, 1);
   assert.ok(fs.readFileSync(path.join(dir, backups[0]), 'utf8').includes('not json'));
@@ -102,6 +104,11 @@ test('normalizeSettings repairs invalid values and decodes legacy plaintext toke
 
   const badInterval = normalizeSettings({ autoSync: { enabled: true, intervalSec: 0 } });
   assert.equal(badInterval.autoSync.intervalSec, DEFAULT_INTERVAL_SEC);
+});
+
+test('旧默认服务器地址升级到 HTTPS，自定义地址保持不变', () => {
+  assert.equal(normalizeSettings({ connection: { apiBase: 'http://103.47.80.133/' } }).connection.apiBase, DEFAULT_API_BASE);
+  assert.equal(normalizeSettings({ connection: { apiBase: 'http://127.0.0.1:18081' } }).connection.apiBase, 'http://127.0.0.1:18081');
 });
 
 test('secret helpers roundtrip unicode', () => {

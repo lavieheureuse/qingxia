@@ -139,7 +139,7 @@ function verifyConfig(configPath, exePath, options) {
       resolve({ ok: false, message: '尚未安装 frpc，无法校验配置', raw: '' });
       return;
     }
-    execFile(exePath, ['verify', '-c', configPath], { timeout, windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(exePath, ['verify', '-c', configPath], { timeout, windowsHide: true, encoding: 'utf8', cwd: path.dirname(configPath) }, (error, stdout, stderr) => {
       const raw = `${stdout || ''}\n${stderr || ''}`.replace(/\x1b\[[0-9;]*m/g, '').trim();
       if (!error) {
         resolve({ ok: true, message: '配置校验通过', raw });

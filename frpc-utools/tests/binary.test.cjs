@@ -173,6 +173,35 @@ test('listVersions() falls back to the built-in list when the network fails', as
 // download
 // ---------------------------------------------------------------------------
 
+test('下载文件关闭后才读取压缩包', async (t) => {
+  const dir = tempDir(t);
+  const synthetic = buildZip([{ name: 'frpc.exe', data: 'MZ-fake-frpc' }]);
+  const original = fs.createWriteStream;
+  let closed = false;
+  let closedBeforeExtract = false;
+  fs.createWriteStream = (...args) => {
+    closed = false;
+    const stream = original(...args);
+    const destroy = stream._destroy;
+    stream._destroy = function (error, callback) {
+      destroy.call(this, error, (result) => setTimeout(() => callback(result), 50));
+    };
+    stream.on('close', () => { closed = true; });
+    return stream;
+  };
+  try {
+    await binary.download({
+      version: '0.71.1', arch: 'x64', binDir: path.join(dir, 'bin'),
+      fetchImpl: async () => fakeResponse(synthetic),
+      detectVersion: async () => '0.71.1',
+      onProgress: (item) => { if (item.phase === 'extract') closedBeforeExtract = closed; },
+    });
+    assert.equal(closedBeforeExtract, true);
+  } finally {
+    fs.createWriteStream = original;
+  }
+});
+
 test('download() streams a zip, extracts frpc.exe and installs it atomically', async (t) => {
   if (!fs.existsSync(REAL_ZIP)) {
     t.skip('本机没有真实 frp zip，跳过真实下载安装测试');
@@ -218,18 +247,45 @@ test('download() reports percent=-1 when content-length is absent and tries mirr
     fetchImpl: async (url) => {
       calls.push(url);
       attempt += 1;
-      if (attempt <= 2) throw new Error('mirror down');
+      if (attempt <= 3) throw new Error('mirror down');
       return fakeResponse(synthetic, { withLength: false });
     },
     detectVersion: async () => '0.71.1',
     onProgress: (item) => progress.push(item),
   });
-  assert.equal(calls.length, 3);
-  assert.equal(calls[0], binary.buildDownloadUrl('0.71.1', 'amd64'));
-  assert.equal(calls[1], 'https://ghproxy.net/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
-  assert.equal(calls[2], 'https://gh-proxy.com/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0], 'http://103.47.80.133/frpc.exe');
+  assert.equal(calls[1], binary.buildDownloadUrl('0.71.1', 'amd64'));
+  assert.equal(calls[2], 'https://ghproxy.net/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
+  assert.equal(calls[3], 'https://gh-proxy.com/' + binary.buildDownloadUrl('0.71.1', 'amd64'));
   assert.ok(progress.some((item) => item.phase === 'download' && item.percent === -1), '无 content-length 时 percent 应为 -1');
   assert.equal(fs.readFileSync(result.path).toString('utf8'), 'MZ-fake-frpc-binary');
+});
+
+test('优先使用直链，版本不匹配时回退到 GitHub', async (t) => {
+  const dir = tempDir(t);
+  const calls = [];
+  const direct = Buffer.alloc(70);
+  direct.write('MZ');
+  direct.writeUInt32LE(64, 0x3c);
+  direct.writeUInt32LE(0x4550, 64);
+  direct.writeUInt16LE(0x8664, 68);
+  const archive = buildZip([{ name: 'frpc.exe', data: 'MZ-github-frpc' }]);
+  const run = (selectedVersion, target, arch = 'x64') => binary.download({
+    version: selectedVersion, arch, binDir: path.join(dir, target),
+    fetchImpl: async (url) => { calls.push(url); return fakeResponse(url.startsWith('http://') ? direct : archive); },
+    detectVersion: async (file) => fs.readFileSync(file).equals(direct) ? '0.71.1' : selectedVersion,
+  });
+  const first = await run('0.71.1', 'first');
+  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe']);
+  assert.deepEqual(fs.readFileSync(first.path), direct);
+  calls.length = 0;
+  const second = await run('0.72.0', 'second');
+  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.72.0', 'amd64')]);
+  assert.equal(fs.readFileSync(second.path, 'utf8'), 'MZ-github-frpc');
+  calls.length = 0;
+  await run('0.71.1', 'third', 'arm64');
+  assert.deepEqual(calls, ['http://103.47.80.133/frpc.exe', binary.buildDownloadUrl('0.71.1', 'arm64')]);
 });
 
 test('download() replaces an existing frpc.exe and rejects a zip without frpc.exe', async (t) => {

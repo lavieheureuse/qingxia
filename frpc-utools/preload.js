@@ -51,6 +51,7 @@
       dataDir,
       binDir: path.join(__dirname, 'bin'),
       runDir: path.join(__dirname, 'run'),
+      caPath: path.join(__dirname, 'core', 'frp-ca.pem'),
       host,
       appVersion,
       platform: process.platform,

@@ -101,7 +101,7 @@ function createFakeApi(t, options) {
       if (url.pathname === '/frp/config' && req.method === 'GET') {
         state.configRequests += 1;
         if (!authOk) return send(401, { error: '未授权' });
-        if (!state.config) return send(404, { error: '这台电脑还没有发布过的配置' });
+        if (!state.config) return send(404, { error: opts.noConfigError || '这台电脑还没有发布过的配置' });
         return send(200, {
           pcId: url.searchParams.get('pcId'),
           version: state.config.version,
@@ -263,6 +263,22 @@ test('bootstrap() exposes the SPEC-SYNC State shape and starts unconfigured', as
   assert.ok(fs.existsSync(path.join(dataDir, 'logs', 'sync.log')), 'bootstrap 应写同步日志');
 });
 
+test('启动时准备 FRP 信任证书且不覆盖不匹配的文件', async (t) => {
+  const dataDir = tempDir(t);
+  const caPath = path.join(tempDir(t), 'source.pem');
+  const target = path.join(dataDir, 'run', 'frp-ca.pem');
+  fs.writeFileSync(caPath, 'trusted ca');
+  const service = createService({ dataDir, caPath });
+  await service.bootstrap();
+  service.dispose();
+  assert.equal(fs.readFileSync(target, 'utf8'), 'trusted ca');
+  fs.writeFileSync(target, 'other ca');
+  const restarted = createService({ dataDir, caPath });
+  t.after(() => restarted.dispose());
+  await assert.rejects(restarted.bootstrap(), /证书与插件证书不一致/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'other ca');
+});
+
 test('默认 frpc 路径跟随插件目录，兼容旧下载路径和自定义路径', async (t) => {
   const dataDir = tempDir(t);
   const binDir = path.join(tempDir(t), 'bin');
@@ -356,7 +372,7 @@ test('saveConnection() validates, persists obfuscated token and updates phase', 
   assert.equal(loaded.connection.pcToken, 'token-abcd-1234');
 });
 
-test('testConnection() maps success / 401 / 404 / network failures', async (t) => {
+test('testConnection() distinguishes an unpublished configuration from authorization and network failures', async (t) => {
   const api = await createFakeApi(t);
   const { service, dataDir } = setup(t);
   await prime(service, api, dataDir);
@@ -380,8 +396,10 @@ test('testConnection() maps success / 401 / 404 / network failures', async (t) =
   await service.saveConnection({ pcToken: 'good-token' });
   api.state.config = null;
   const notFound = await service.testConnection();
-  assert.equal(notFound.code, 'NOT_FOUND');
-  assert.match(notFound.message, /还没有发布/);
+  assert.equal(notFound.ok, true);
+  assert.match(notFound.message, /尚未发布/);
+  assert.equal(service.getState().remote.reachable, true);
+  assert.equal(service.getState().remote.version, null);
 
   api.state.config = { version: 1, config: iniConfig(), updatedAt: null };
   const probe = http.createServer();
@@ -585,16 +603,27 @@ test('a 401 token failure returns UNAUTHORIZED and writes no config files', asyn
   assert.ok(!JSON.stringify(current.lastError).includes('wrong-token'), '错误信息不能包含明文 token');
 });
 
-test('a 404 (nothing published) is a friendly NOT_FOUND failure', async (t) => {
+test('syncNow() reports an unpublished configuration without changing local data', async (t) => {
   const api = await createFakeApi(t, { config: null });
   const { service, dataDir } = setup(t);
   await prime(service, api, dataDir);
-  await assert.rejects(service.syncNow(), (error) => {
-    assert.equal(error.code, 'NOT_FOUND');
-    assert.match(error.message, /还没有发布/);
-    return true;
-  });
-  assert.equal(service.getState().applied.version, null);
+  const result = await service.syncNow();
+  assert.equal(result.phase, 'idle');
+  assert.equal(result.remote.reachable, true);
+  assert.equal(result.lastSync.action, 'skip');
+  assert.equal(result.lastSync.version, null);
+  assert.equal(result.applied.version, null);
+  assert.equal(api.state.statusReports.length, 0);
+});
+
+test('an unrelated 404 does not count as an authorized connection', async (t) => {
+  const api = await createFakeApi(t, { config: null, noConfigError: '未知路径' });
+  const { service, dataDir } = setup(t);
+  await prime(service, api, dataDir);
+  const result = await service.testConnection();
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'NOT_FOUND');
+  assert.equal(service.getState().remote.reachable, false);
 });
 
 test('syncNow() requires configuration and a binary before touching the network', async (t) => {
@@ -725,6 +754,47 @@ test('startFrpc() requires a config and a binary; unexpected exits set phase=err
 // auto sync
 // ---------------------------------------------------------------------------
 
+test('启动时恢复已有配置，并对失效授权给出明确错误', async (t) => {
+  const api = await createFakeApi(t);
+  for (const valid of [true, false]) {
+    const { service, dataDir, state } = setup(t);
+    const store = createStore(dataDir);
+    const settings = store.read();
+    const exe = path.join(dataDir, 'bin', 'frpc.exe');
+    fs.mkdirSync(path.dirname(exe), { recursive: true });
+    fs.writeFileSync(exe, 'MZ-fake-frpc');
+    fs.mkdirSync(path.join(dataDir, 'run'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'run', 'frpc.toml'), iniConfig());
+    fs.writeFileSync(path.join(dataDir, 'run', 'frpc.toml.version'), '1');
+    settings.frpc = { path: exe, version: '0.71.1', source: 'custom' };
+    settings.connection = { apiBase: api.baseUrl, pcId: 'pc-home', pcToken: valid ? api.state.token : 'invalid-token' };
+    store.write(settings);
+    await service.bootstrap();
+    await waitFor(() => valid ? service.getState().frpc.running : service.getState().lastError?.code === 'UNAUTHORIZED', 4000, '启动检查');
+    const result = service.getState();
+    assert.equal(result.autoSync.enabled, false, '启动恢复不应开启定时同步');
+    assert.equal(result.frpc.running, valid);
+    if (!valid) {
+      assert.match(result.lastError.message, /ID 或 Token 无效/);
+      assert.equal(state.runners.length, 0, '授权失败时不应启动旧配置');
+    }
+    service.dispose();
+  }
+});
+
+test('手动启动时授权失效不会被误报为进程启动失败', async (t) => {
+  const api = await createFakeApi(t);
+  const { service, dataDir, state } = setup(t);
+  await prime(service, api, dataDir);
+  await service.syncNow();
+  await service.stopFrpc();
+  const runners = state.runners.length;
+  api.state.token = 'different-token';
+  await assert.rejects(service.startFrpc(), { code: 'UNAUTHORIZED' });
+  assert.equal(service.getState().lastError.code, 'UNAUTHORIZED');
+  assert.equal(state.runners.length, runners);
+});
+
 test('启动时自动同步设置持久化，并在下次启动时立即同步', async (t) => {
   const api = await createFakeApi(t);
   const { service, dataDir, internals } = setup(t);
@@ -740,6 +810,7 @@ test('启动时自动同步设置持久化，并在下次启动时立即同步',
   assert.equal(initial.autoSync.enabled, true);
   await waitFor(() => restarted.getState().lastSync.ok === true, 4000, '启动时同步');
   assert.equal(api.state.configRequests, 1);
+  await waitFor(() => restarted.getState().autoSync.nextAt !== null, 4000, '安排下次同步');
   assert.ok(restarted.getState().autoSync.nextAt > Date.now());
   await restarted.setStartOnLaunch(false);
   assert.equal(createStore(dataDir).read().autoSync.startOnLaunch, false);
@@ -1032,6 +1103,26 @@ test('publishProxies() requires a configured connection before any request', asy
   });
   assert.equal(api.state.publishRequests.length, 0);
   assert.equal(api.state.configRequests, 0);
+});
+
+test('publishProxies() does not publish when frpc is missing', async (t) => {
+  const api = await createFakeApi(t);
+  const { service } = setup(t);
+  await service.bootstrap();
+  await service.saveConnection({ apiBase: api.baseUrl, pcId: 'pc-home', pcToken: api.state.token });
+  await assert.rejects(service.publishProxies([VALID_PROXY]), { code: 'BINARY_MISSING' });
+  assert.equal(api.state.publishRequests.length, 0);
+});
+
+test('a newly authorized computer can publish its first proxy', async (t) => {
+  const api = await createFakeApi(t, { config: null });
+  const { service, dataDir } = setup(t);
+  await prime(service, api, dataDir);
+  assert.equal((await service.testConnection()).ok, true);
+  const result = await service.publishProxies([VALID_PROXY]);
+  assert.equal(result.applied.version, 1);
+  assert.equal(result.frpc.running, true);
+  assert.equal(api.state.publishRequests.length, 1);
 });
 
 test('publishProxies() publishes then force-applies the new version and restarts frpc', async (t) => {

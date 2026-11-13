@@ -18,7 +18,7 @@ const crypto = require('node:crypto');
 
 const SETTINGS_VERSION = 2;
 const SECRET_PREFIX = 'utf8:';
-const DEFAULT_API_BASE = 'http://103.47.80.133';
+const DEFAULT_API_BASE = 'https://103.47.80.133';
 const DEFAULT_PC_ID = 'pc-home';
 const DEFAULT_INTERVAL_SEC = 45;
 const INTERVAL_MIN_SEC = 1;
@@ -87,13 +87,14 @@ function stripBom(text) {
 function normalizeApiBase(value) {
   const text = asString(value).trim();
   if (!text) return DEFAULT_API_BASE;
-  return text.replace(/\/+$/, '');
+  const normalized = text.replace(/\/+$/, '');
+  return normalized === 'http://103.47.80.133' ? DEFAULT_API_BASE : normalized;
 }
 
 function defaultSettings() {
   return {
     version: SETTINGS_VERSION,
-    connection: { apiBase: DEFAULT_API_BASE, pcId: DEFAULT_PC_ID, pcToken: '' },
+    connection: { apiBase: DEFAULT_API_BASE, pcId: `pc-${crypto.randomUUID()}`, pcToken: '' },
     frpc: { path: '', version: '', source: 'downloaded' },
     autoSync: { enabled: false, intervalSec: DEFAULT_INTERVAL_SEC, startOnLaunch: false },
     ui: { autoScroll: true },

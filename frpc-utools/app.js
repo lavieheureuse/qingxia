@@ -330,7 +330,7 @@
       } else if (sync.action === 'apply') {
         notify(`已同步并应用 v${sync.version === null ? '' : sync.version}`.trim());
       } else if (sync.action === 'skip') {
-        notify('已是最新配置，无需重启 frpc。');
+        notify(sync.version === null ? '当前电脑尚未发布配置，可先新增代理。' : '已是最新配置，无需重启 frpc。');
       }
     }
     scheduleRender();
@@ -354,6 +354,9 @@
     if (state.phase === 'applying') {
       return { tone: 'syncing', title: '正在应用配置…', subtitle: '校验配置并重启 frpc，请稍候。' };
     }
+    if (state.lastError && state.lastError.code === 'UNAUTHORIZED') {
+      return { tone: 'error', title: '设备授权无效', subtitle: '电脑 ID 或 Token 无效，或设备已被停用。请联系管理员重新授权。', error: state.lastError.message };
+    }
     const syncError = state.lastSync.ok === false && state.lastSync.error ? state.lastSync.error : null;
     if (state.phase === 'error') {
       return {
@@ -374,6 +377,9 @@
       }
       if (state.remote.error) {
         return { tone: 'error', title: '无法连接服务器', subtitle: '请检查 API 地址、网络与 Token 后重试。', error: state.remote.error };
+      }
+      if (state.remote.reachable && state.remote.fetchedAt !== null) {
+        return { tone: 'waiting', title: '尚未发布配置', subtitle: '连接成功，请新增代理并发布。' };
       }
       return { tone: 'waiting', title: '等待首次同步', subtitle: '尚未从服务器拉取配置，点击「立即同步」。' };
     }
@@ -629,7 +635,7 @@
     const hint = $('connection-hint');
     hint.textContent = connection.hasToken
       ? 'Token 只保存在本机，不会出现在日志或界面里。'
-      : '默认服务器 http://103.47.80.133、电脑 ID pc-home；Token 由 iostool 生成，只保存在本机。';
+      : '将电脑 ID 发给管理员获取 Token；Token 只保存在本机。';
 
     const test = $('test-connection');
     const testLabel = $('test-label');
@@ -811,7 +817,7 @@
     } else {
       $('proxy-source').textContent = state.remote.version !== null
         ? `来自手机发布 · v${state.remote.version}${state.remote.updatedAt ? ` · ${formatDateTime(state.remote.updatedAt)}` : ''}`
-        : (state.remote.reachable === false ? '服务器暂不可达，等待重试' : '来自手机发布，电脑只读');
+        : (state.remote.reachable === false ? '服务器暂不可达，等待重试' : '尚未发布配置');
     }
 
     const dirty = editable && ui.draftDirty;
@@ -1458,7 +1464,7 @@
     const hint = $('connection-hint');
     const original = ui.state.connection.hasToken
       ? 'Token 只保存在本机，不会出现在日志或界面里。'
-      : '默认服务器 http://103.47.80.133、电脑 ID pc-home；Token 由 iostool 生成，只保存在本机。';
+      : '将电脑 ID 发给管理员获取 Token；Token 只保存在本机。';
     hint.textContent = message;
     clearTimeout(ui.connectionHintTimer);
     ui.connectionHintTimer = setTimeout(() => { hint.textContent = original; }, 2400);

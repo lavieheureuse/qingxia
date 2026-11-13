@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRP 设备授权管理</title>
+<style>
+:root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#20382e;background:#f5f7f3;font-size:15px}*{box-sizing:border-box}body{margin:0}.top{height:64px;border-bottom:1px solid #e0e7dd;background:#fff;display:flex;align-items:center;padding:0 max(24px,calc((100% - 1120px)/2));gap:12px}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#245c40;color:white;font-weight:700}.brand{font-weight:700;letter-spacing:.02em}main{max-width:1120px;margin:0 auto;padding:54px 24px}.heading{display:flex;justify-content:space-between;align-items:end;gap:24px}.heading h1{font-size:28px;margin:0 0 10px}.heading p,.muted{color:#708077;margin:0;line-height:1.65}button,input{font:inherit}button{cursor:pointer}.primary,.secondary,.danger{border-radius:8px;padding:10px 15px;font-weight:600;border:1px solid #cfdacf;background:#fff;color:#285b40}.primary{background:#285f42;color:#fff;border-color:#285f42}.danger{color:#a03e3e}.primary:hover{background:#1b4931}button:disabled{opacity:.55;cursor:wait}.panel{margin-top:32px;background:white;border:1px solid #dfe7dd;border-radius:12px;overflow:hidden}.panel-head{padding:20px 22px;border-bottom:1px solid #e8ede7;display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-head h2{font-size:16px;margin:0}.count{font-size:13px;color:#78877d}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left;min-width:680px}th,td{padding:16px 22px;border-bottom:1px solid #edf1ec;vertical-align:middle}th{color:#718076;font-weight:500;font-size:13px;background:#fafbf9}tbody tr:last-child td{border-bottom:0}.id{font-family:ui-monospace,Consolas,monospace;font-size:13px;overflow-wrap:anywhere}.status{display:inline-block;border-radius:20px;padding:4px 10px;font-size:12px;background:#e8f3eb;color:#24613f}.status.off{background:#f1f2ef;color:#69746d}.actions{display:flex;gap:8px;flex-wrap:wrap}.actions button{padding:6px 9px;font-size:13px}.empty{padding:58px 20px;text-align:center;color:#7b8a80}.note{margin-top:20px;font-size:13px;color:#77857c;line-height:1.7}.error{background:#fff1ed;color:#a1382c;border:1px solid #f0cbc4;padding:12px 14px;border-radius:8px;margin-top:18px}dialog{border:1px solid #d9e2d9;border-radius:14px;padding:0;width:min(480px,calc(100% - 32px));box-shadow:0 24px 70px #142e2030}dialog::backdrop{background:#13251c80}.dialog-body{padding:26px}h3{font-size:20px;margin:0 0 9px}.dialog-body p{color:#687a6e;line-height:1.6;margin:0 0 22px}.field{display:block;margin-top:18px;font-weight:600}.field input{width:100%;padding:11px;border:1px solid #cfdbcf;border-radius:8px;margin-top:8px;color:#20382e}.buttons{display:flex;gap:10px;justify-content:flex-end;margin-top:24px}.token{word-break:break-all;font-family:ui-monospace,Consolas,monospace;background:#f1f6ef;border:1px solid #d9e7d7;padding:14px;border-radius:8px;user-select:all}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}@media(max-width:600px){main{padding:35px 16px}.top{padding:0 16px}.heading{align-items:flex-start;flex-direction:column}.heading h1{font-size:24px}.heading .primary{width:100%}}
+</style>
+</head>
+<body>
+<header class="top"><span class="mark">F</span><span class="brand">FRP 管理</span></header>
+<main>
+ <div class="heading"><div><h1>设备授权</h1><p>为每台电脑发放独立的访问凭证，管理服务器使用权限。</p></div><button id="add" class="primary" type="button">＋ 新增授权</button></div>
+ <div id="error" class="error" role="alert" hidden></div>
+ <section class="panel" aria-labelledby="devices-title"><div class="panel-head"><h2 id="devices-title">已授权设备</h2><span id="count" class="count"></span></div><div class="scroll"><table><thead><tr><th>设备</th><th>电脑 ID</th><th>授权状态</th><th>操作</th></tr></thead><tbody id="devices"></tbody></table></div><div id="empty" class="empty" hidden>还没有设备，点击“新增授权”开始。</div></section>
+ <p class="note">电脑 ID 由客户端生成。创建授权后，请通过安全方式把 Token 发送给用户。</p>
+</main>
+<dialog id="form-dialog"><form id="device-form" class="dialog-body"><h3>新增设备授权</h3><p>输入用户提供的电脑 ID，生成一个专属 Token。</p><label class="field">电脑 ID<input id="pc-id" required maxlength="64" autocomplete="off" placeholder="例如 pc-..." pattern="[A-Za-z0-9_-]+"></label><label class="field">备注<input id="remark" maxlength="100" autocomplete="off" placeholder="例如 用户姓名或设备用途"></label><div id="form-error" class="error" role="alert" hidden></div><div class="buttons"><button class="secondary" id="cancel" type="button">取消</button><button class="primary" type="submit">生成 Token</button></div></form></dialog>
+<dialog id="token-dialog"><div class="dialog-body"><h3>Token 已生成</h3><p>请复制并安全地发送给用户。关闭后将无法再次查看。</p><div id="token" class="token"></div><div class="buttons"><button id="close-token" class="secondary" type="button">关闭</button><button id="copy" class="primary" type="button">复制 Token</button></div></div></dialog>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const api = new URL('./api/devices', location.href);
+let csrf = '';
+async function request(url, options = {}) {
+  const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...options, headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': csrf } : {}), ...options.headers } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || '请求失败，请检查登录状态或稍后重试');
+  return body;
+}
+function showError(target, message) { target.textContent = message; target.hidden = !message; }
+function action(label, cls, handler) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.className = cls; b.addEventListener('click', handler); return b; }
+async function load() {
+  try {
+    const result = await request(api);
+    csrf = result.csrf || '';
+    if (!Array.isArray(result.devices)) throw new Error('服务器返回的数据格式不正确');
+    $('devices').replaceChildren();
+    $('count').textContent = result.devices.length + ' 台设备';
+    $('empty').hidden = result.devices.length !== 0;
+    for (const device of result.devices) {
+      const row = document.createElement('tr');
+      for (const [value, cls] of [[device.remark || '未命名设备', ''], [device.pcId, 'id']]) { const cell = document.createElement('td'); cell.className = cls; cell.textContent = value; row.append(cell); }
+      const stateCell = document.createElement('td'); const state = document.createElement('span'); state.className = 'status' + (device.enabled ? '' : ' off'); state.textContent = device.enabled ? '已启用' : '已停用'; stateCell.append(state); row.append(stateCell);
+      const cell = document.createElement('td'); cell.className = 'actions';
+      const run = async (operation) => { if (!confirm(operation === 'delete' ? '确定删除该设备授权？旧 Token 将失效，设备配置会保留。' : operation === 'rotate' ? '重置后旧 Token 将失效，继续吗？' : device.enabled ? '确定停用该设备？' : '确定启用该设备？')) return; try { const result = await request(new URL(encodeURIComponent(device.pcId) + '/' + operation, api.href + '/'), { method: 'POST', body: JSON.stringify({ enabled: !device.enabled }) }); if (operation === 'rotate') showToken(result.token); await load(); } catch (e) { showError($('error'), e.message); } };
+      cell.append(action(device.enabled ? '停用' : '启用', device.enabled ? 'danger' : 'secondary', () => run('status')), action('重置 Token', 'secondary', () => run('rotate')), action('删除', 'danger', () => run('delete'))); row.append(cell); $('devices').append(row);
+    }
+    showError($('error'), '');
+  } catch (e) { showError($('error'), e.message); }
+}
+function showToken(token) { if (typeof token !== 'string' || !token) throw new Error('服务器未返回 Token'); $('token').textContent = token; $('token-dialog').showModal(); }
+$('add').addEventListener('click', () => { $('device-form').reset(); showError($('form-error'), ''); $('form-dialog').showModal(); });
+$('cancel').addEventListener('click', () => $('form-dialog').close());
+$('device-form').addEventListener('submit', async e => { e.preventDefault(); const button = e.submitter; button.disabled = true; try { const result = await request(api, { method: 'POST', body: JSON.stringify({ pcId: $('pc-id').value.trim(), remark: $('remark').value.trim() }) }); if (typeof result.token !== 'string' || !result.token) throw new Error('服务器未返回 Token'); $('form-dialog').close(); showToken(result.token); await load(); } catch (err) { showError($('form-error'), err.message); } finally { button.disabled = false; } });
+$('close-token').addEventListener('click', () => $('token-dialog').close());
+$('token-dialog').addEventListener('close', () => { $('token').textContent = ''; });
+$('copy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('token').textContent); $('copy').textContent = '已复制'; setTimeout(() => { $('copy').textContent = '复制 Token'; }, 2000); } catch (_) { $('copy').textContent = '请手动选择复制'; } });
+load();
+</script>
+</body>
+</html>

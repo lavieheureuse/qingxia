@@ -62,7 +62,7 @@ else app.on('second-instance', showMain);
 const bundle = app.isPackaged ? path.join(process.resourcesPath, 'bundle') : path.join(__dirname, 'resources');
 const data = app.getPath('userData');
 const settingsFile = path.join(data, 'toolbox.json');
-let settings = { version: 1, plugins: [], panel: [], independent: [], background: [], pluginStartup: [], middle: true, autoStart: false };
+let settings = { version: 1, plugins: [], panel: [], independent: [], background: [], pluginStartup: [], mainIndependent: false, middle: true, autoStart: false };
 try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) }; } catch (_) {}
 function save() { fs.mkdirSync(data, { recursive: true }); const tmp = settingsFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(settings, null, 2)); fs.renameSync(tmp, settingsFile); }
 function readPlugin(dir) {
@@ -174,6 +174,28 @@ const legacyPluginData = new Map([
   ['download\0拾影', 'shiying-douyin-plugin'],
   ['application-proxy\0应用代理', 'application-proxy']
 ]);
+function emptyFrpcData(dir) {
+  try {
+    const files = fs.readdirSync(dir);
+    if (files.length !== 1 || files[0] !== 'settings.json') return false;
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const connection = settings.connection, frpc = settings.frpc, sync = settings.autoSync;
+    return !!connection && !!frpc && !!sync && !connection.pcToken && !connection.pcTokenEnc && !frpc.path && !sync.enabled && !sync.startOnLaunch;
+  } catch (_) { return false; }
+}
+function configuredFrpcData(dir) {
+  try {
+    const connection = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^\uFEFF/, '')).connection || {};
+    return typeof connection.pcId === 'string' && !!connection.pcId.trim()
+      && (typeof connection.pcToken === 'string' && !!connection.pcToken || typeof connection.pcTokenEnc === 'string' && !!connection.pcTokenEnc);
+  } catch (_) { return false; }
+}
+function describeFrpcData(dir) {
+  try {
+    const connection = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^\uFEFF/, '')).connection || {};
+    return `电脑 ID：${connection.pcId || '未设置'}，Token：${connection.pcToken || connection.pcTokenEnc ? '已设置' : '未设置'}`;
+  } catch (_) { return '无法读取连接设置'; }
+}
 function preparePluginData(plugin) {
   const name = legacyPluginData.get(`${plugin.code}\0${plugin.name}`);
   if (!name) return '';
@@ -183,7 +205,37 @@ function preparePluginData(plugin) {
     if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('插件数据目录不能是链接');
     if (fs.existsSync(oldDir)) {
       if (fs.lstatSync(oldDir).isSymbolicLink()) throw new Error('原插件数据目录不能是链接');
-      if (fs.existsSync(newDir)) throw new Error('新旧插件数据目录同时存在，请先备份并检查后再处理');
+      if (fs.existsSync(newDir)) {
+        if (fs.lstatSync(newDir).isSymbolicLink()) throw new Error('新插件数据目录不能是链接');
+        let choice = 0;
+        if (name !== 'frpc-utools' || !emptyFrpcData(oldDir) || !configuredFrpcData(newDir)) {
+          const details = name === 'frpc-utools'
+            ? `当前数据：${describeFrpcData(newDir)}\n旧数据：${describeFrpcData(oldDir)}\n\n`
+            : '';
+          if (mainWindow) pluginDialogs.add(mainWindow);
+          try {
+            choice = dialog.showMessageBoxSync({
+              type: 'question', title: '选择插件数据', message: `发现两份${plugin.name}数据`,
+              detail: `${details}请选择要继续使用的数据，另一份会保留为备份。两份数据不会合并。\n\n当前目录：${newDir}\n旧目录：${oldDir}`,
+              buttons: ['使用当前数据', '使用旧数据', '取消'], defaultId: 0, cancelId: 2, noLink: true,
+            });
+          } finally { if (mainWindow) pluginDialogs.delete(mainWindow); }
+        }
+        if (choice === 2) return null;
+        const backup = path.join(data, `${name}-backup-${require('node:crypto').randomUUID()}`);
+        if (fs.existsSync(backup)) throw new Error('备份目录已存在');
+        if (choice === 0) fs.renameSync(oldDir, backup);
+        else {
+          fs.renameSync(newDir, backup);
+          try { fs.renameSync(oldDir, newDir); }
+          catch (error) {
+            try { fs.renameSync(backup, newDir); }
+            catch (_) { throw new Error(`恢复数据失败，请检查 ${backup} 与 ${oldDir}`); }
+            throw error;
+          }
+        }
+        return root;
+      }
       fs.mkdirSync(root, { recursive: true });
       fs.renameSync(oldDir, newDir);
     }
@@ -267,7 +319,7 @@ async function changePluginFolder(target) {
   return cleanupFailed ? '插件已迁移到新目录，但部分旧插件文件未能清理，请检查原目录。' : '';
 }
 function plugins() { return settings.plugins.flatMap(dir => { try { return [readPlugin(dir)]; } catch (_) { return []; } }); }
-function snapshot() { return { plugins: plugins().map(displayPlugin), panel: settings.panel, middle: settings.middle, autoStart: settings.autoStart, version: app.getVersion(), folder: pluginFolder(), appIcon: require('node:url').pathToFileURL(path.join(bundle, 'app-icon.png')).href }; }
+function snapshot() { return { plugins: plugins().map(displayPlugin), panel: settings.panel, mainIndependent: settings.mainIndependent, middle: settings.middle, autoStart: settings.autoStart, version: app.getVersion(), folder: pluginFolder(), appIcon: require('node:url').pathToFileURL(path.join(bundle, 'app-icon.png')).href }; }
 function refresh() { for (const win of [mainWindow, panelWindow]) if (win && !win.isDestroyed()) win.webContents.send('updated', snapshot()); }
 function windowForPanel() {
   if (panelWindow && !panelWindow.isDestroyed()) return panelWindow;
@@ -290,6 +342,7 @@ function openPlugin(dir, background = false) {
   const plugin = plugins().find(p => p.dir === dir); if (!plugin) throw new Error('工具不存在');
   if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
   const pluginDataRoot = preparePluginData(plugin);
+  if (pluginDataRoot === null) return;
   const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, show: !background, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
   const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
   view.webContents.on('did-finish-load', () => { view.webContents.insertCSS('::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#b8c8b9;border:2px solid transparent;border-radius:8px;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:#87a48c;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-corner{background:transparent}').catch(error => console.error('设置滚动条样式失败:', error)); });
@@ -322,9 +375,10 @@ app.whenReady().then(async () => {
   if (!singleInstance) return;
   Menu.setApplicationMenu(null);
   fs.mkdirSync(data, { recursive: true });
-  mainWindow = new BrowserWindow({ width: 1000, height: 740, minWidth: 700, minHeight: 550, title: '轻匣', icon: path.join(bundle, 'app-icon.ico'), webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
+  mainWindow = new BrowserWindow({ width: 1000, height: 740, minWidth: 700, minHeight: 550, title: '轻匣', icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
   mainWindow.setMenu(null);
   mainWindow.loadFile('index.html'); mainWindow.on('close', e => { if (!app.quitting) { e.preventDefault(); mainWindow.hide(); } });
+  mainWindow.on('blur', () => { if (!settings.mainIndependent && !pluginDialogs.has(mainWindow) && !mainWindow.isDestroyed()) mainWindow.hide(); });
   tray = new Tray(nativeImage.createFromPath(path.join(bundle, 'app-icon.png')).resize({ width: 16, height: 16 }));
   tray.setToolTip('轻匣'); tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开轻匣', click: showMain }, { label: '退出', click: () => app.quit() }])); tray.on('click', showMain);
   for (const dir of settings.pluginStartup) {
@@ -427,13 +481,15 @@ async function toolboxAction(event, action, value) {
   if (![mainWindow, panelWindow].some(w => w && w.webContents === event.sender)) throw new Error('无权操作');
   if (changingFolder && action !== 'state' && action !== 'hide') throw new Error('正在更改插件目录，请稍候。');
   if (action === 'state') return snapshot();
+  if (action === 'main-independent' && event.sender === mainWindow.webContents) { const previous = settings.mainIndependent; settings.mainIndependent = !!value; try { save(); } catch (error) { settings.mainIndependent = previous; throw error; } return snapshot(); }
   if (action === 'open') return openPlugin(value);
   if (action === 'hide') return panelWindow && panelWindow.hide();
   if (action === 'manage') { if (panelWindow) panelWindow.hide(); mainWindow.show(); mainWindow.webContents.send('navigate', 'panel'); return; }
   if (action === 'github') return downloadGithub(value);
   if (action === 'github-clear') { clearGithubStaging(); return; }
   if (action === 'pick') {
-    const r = await dialog.showOpenDialog(mainWindow, { title: '选择插件的 plugin.json 文件', properties: ['openFile'], filters: [{ name: '插件配置文件', extensions: ['json'] }] });
+    pluginDialogs.add(mainWindow);
+    let r; try { r = await dialog.showOpenDialog(mainWindow, { title: '选择插件的 plugin.json 文件', properties: ['openFile'], filters: [{ name: '插件配置文件', extensions: ['json'] }] }); } finally { pluginDialogs.delete(mainWindow); }
     if (r.canceled || !r.filePaths.length) return null;
     if (path.basename(r.filePaths[0]).toLowerCase() !== 'plugin.json') throw new Error('请选择名为 plugin.json 的插件配置文件。');
     return displayPlugin(readPlugin(path.dirname(r.filePaths[0])));
@@ -456,12 +512,13 @@ async function toolboxAction(event, action, value) {
   if (action === 'folder') { fs.mkdirSync(pluginFolder(), { recursive: true }); const error = await shell.openPath(pluginFolder()); if (error) throw new Error('无法打开插件目录，请检查文件夹是否可访问。'); return; }
   if (action === 'change-folder') {
     changingFolder = true;
+    pluginDialogs.add(mainWindow);
     try {
       const result = await dialog.showOpenDialog(mainWindow, { title: '选择插件存放位置（自动创建 qingxia-plugin 文件夹）', properties: ['openDirectory', 'createDirectory'] });
       if (result.canceled || !result.filePaths.length) return snapshot();
       const warning = await changePluginFolder(result.filePaths[0]); refresh(); return { ...snapshot(), warning };
     }
-    finally { changingFolder = false; }
+    finally { pluginDialogs.delete(mainWindow); changingFolder = false; }
   }
   throw new Error('不支持的操作');
 }

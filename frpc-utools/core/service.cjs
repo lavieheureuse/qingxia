@@ -626,10 +626,10 @@ function createService(options) {
       let payload = null;
       try { payload = text ? JSON.parse(text) : null; } catch (_) { payload = null; }
       if (status === 401) {
-        throw createError('UNAUTHORIZED', '电脑 Token 无效或与电脑 ID 不匹配（401 未授权）');
+        throw createError('UNAUTHORIZED', '电脑 ID 或 Token 无效，或设备已被停用，请联系管理员重新授权（401）');
       }
       if (status === 404) {
-        throw createError('NOT_FOUND', serverErrorText(payload) || '这台电脑还没有发布过的配置，请先在手机端发布');
+        throw createError('NOT_FOUND', serverErrorText(payload) || '请求的接口不存在（HTTP 404）');
       }
       if (status === 400) {
         const detail = serverErrorText(payload);
@@ -654,7 +654,13 @@ function createService(options) {
 
   async function fetchRemoteConfig() {
     const pcId = settings.connection.pcId;
-    const payload = await requestJson('GET', `/frp/config?pcId=${encodeURIComponent(pcId)}`, { auth: true });
+    let payload;
+    try {
+      payload = await requestJson('GET', `/frp/config?pcId=${encodeURIComponent(pcId)}`, { auth: true });
+    } catch (error) {
+      if (error.code === 'NOT_FOUND' && error.message === '这台电脑还没有发布过的配置') return null;
+      throw error;
+    }
     const version = Number(payload.version);
     if (!Number.isInteger(version) || version < 0) {
       throw createError('INTERNAL', '服务器返回的版本号无效');
@@ -826,6 +832,12 @@ function createService(options) {
       fs.cpSync(oldRun, dirs.run, { recursive: true, force: false, errorOnExist: true });
     }
     fs.mkdirSync(dirs.run, { recursive: true });
+    if (opts.caPath) {
+      const ca = fs.readFileSync(opts.caPath);
+      const target = path.join(dirs.run, 'frp-ca.pem');
+      if (!fs.existsSync(target)) fs.writeFileSync(target, ca, { flag: 'wx' });
+      else if (!fs.readFileSync(target).equals(ca)) throw createError('INTERNAL', '运行目录中的 FRP 证书与插件证书不一致，请检查 frp-ca.pem');
+    }
     fs.mkdirSync(dirs.bin, { recursive: true });
     fs.mkdirSync(dirs.logs, { recursive: true });
     settings = store.read();
@@ -846,6 +858,15 @@ function createService(options) {
     scheduleAutoSync(settings.autoSync.startOnLaunch);
     booted = true;
     emitState();
+    if (!settings.autoSync.startOnLaunch && isConfigured() && binaryInfo.status === 'ready' && applied.version !== null && !frpcState.running) {
+      const timer = setTimeout(() => {
+        enqueue(async () => {
+          if (disposed || frpcState.running) return;
+          try { await syncInternal({ manual: false }); } catch (_) { /* 同步过程已记录错误 */ }
+        }).catch(() => {});
+      }, 0);
+      if (typeof timer.unref === 'function') timer.unref();
+    }
     return snapshot();
   }
 
@@ -926,6 +947,15 @@ function createService(options) {
         } catch (error) {
           remote = Object.assign({}, remote, { reachable: false, fetchedAt: Date.now(), error: redact(error.message) });
           throw error;
+        }
+        if (!data) {
+          remote = Object.assign(emptyRemote(), { reachable: true, fetchedAt: Date.now() });
+          if (lastSync.ok === false && lastSync.error === '这台电脑还没有发布过的配置') lastSync = emptyLastSync();
+          clearLastError();
+          refreshPhase();
+          emitState();
+          logSync('info', '连接成功，当前电脑尚未发布配置');
+          return { ok: true, message: '尚未发布配置，可新增代理' };
         }
         applyRemoteMetadata(data);
         clearLastError();
@@ -1045,6 +1075,20 @@ function createService(options) {
       throw createError('BINARY_MISSING', '尚未安装 frpc，请先下载或手动指定 frpc.exe 路径');
     }
     if (!isFile(configPath)) throw createError('CONFIG_INVALID', '还没有生效配置，请先立即同步');
+    try {
+      await fetchRemoteConfig();
+    } catch (error) {
+      if (error.code === 'UNAUTHORIZED') {
+        const message = redact(error.message);
+        remote = Object.assign({}, remote, { reachable: false, fetchedAt: Date.now(), error: message });
+        lastSync = { at: Date.now(), ok: false, action: 'fail', version: applied.version, error: message };
+        setLastError('UNAUTHORIZED', message);
+        refreshPhase();
+        emitState();
+        logSync('error', message);
+        throw error;
+      }
+    }
     transientPhase = 'applying';
     lastError = null;
     refreshPhase();
@@ -1234,6 +1278,15 @@ function createService(options) {
         logSync('error', `拉取配置失败：${message}`);
         throw error;
       }
+      if (!remoteData) {
+        remote = Object.assign(emptyRemote(), { reachable: true, fetchedAt: Date.now() });
+        lastSync = { at: Date.now(), ok: true, action: 'skip', version: null, error: null };
+        transientPhase = null;
+        clearLastError();
+        refreshPhase();
+        logSync('info', '当前电脑尚未发布配置，可先新增代理');
+        return snapshot();
+      }
       applyRemoteMetadata(remoteData);
       const version = remoteData.version;
 
@@ -1368,6 +1421,7 @@ function createService(options) {
       }
       if (syncInProgress) throw createError('BUSY', '正在同步中，请稍候');
       const normalized = validatePublishProxies(proxies);
+      if (binaryInfo.status !== 'ready') throw createError('BINARY_MISSING', '请先下载或指定 frpc 程序，再发布代理');
       logSync('info', `正在发布 ${normalized.length} 条代理配置到服务器…`);
       let published;
       try {
