@@ -1,0 +1,16 @@
+{
+  "id": "com.qingxia.json-workshop",
+  "main": "index.html",
+  "logo": "logo.png",
+  "pluginSetting": {
+    "single": true,
+    "height": 760
+  },
+  "features": [
+    {
+      "code": "json-workshop",
+      "description": "JSON 格式化、图片转 JSON 与 JSON 转图片工具",
+      "cmds": ["JSON 工坊", "json", "JSON格式化", "图片转JSON", "JSON转图片"]
+    }
+  ]
+}

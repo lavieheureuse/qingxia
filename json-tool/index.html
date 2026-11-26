@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; form-action 'none'">
+  <title>JSON 工坊</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+</head>
+<body data-theme="light">
+  <!-- Local Tabler-aligned SVG icon sprite for offline plugin and strict CSP -->
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true">
+    <defs>
+      <symbol id="ic-braces" viewBox="0 0 24 24">
+        <path d="M7 4a2 2 0 0 0 -2 2v3a2 3 0 0 1 -2 3a2 3 0 0 1 2 3v3a2 2 0 0 0 2 2" />
+        <path d="M17 4a2 2 0 0 1 2 2v3a2 3 0 0 0 2 3a2 3 0 0 0 -2 3v3a2 2 0 0 1 -2 2" />
+      </symbol>
+      <symbol id="ic-photo-up" viewBox="0 0 24 24">
+        <path d="M15 8h.01" />
+        <path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5" />
+        <path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3.5 3.5" />
+        <path d="M14 14l1 -1c.679 -.653 1.473 -.829 2.214 -.526" />
+        <path d="M19 22v-6" />
+        <path d="M22 19l-3 -3l-3 3" />
+      </symbol>
+      <symbol id="ic-photo-down" viewBox="0 0 24 24">
+        <path d="M15 8h.01" />
+        <path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5" />
+        <path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l4 4" />
+        <path d="M14 14l1 -1c.653 -.629 1.413 -.815 2.13 -.559" />
+        <path d="M19 16v6" />
+        <path d="M22 19l-3 3l-3 -3" />
+      </symbol>
+      <symbol id="ic-sun" viewBox="0 0 24 24">
+        <path d="M12 12m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" />
+        <path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />
+      </symbol>
+      <symbol id="ic-moon" viewBox="0 0 24 24">
+        <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+      </symbol>
+      <symbol id="ic-wand" viewBox="0 0 24 24">
+        <path d="M6 21l15 -15l-3 -3l-15 15l3 3" />
+        <path d="M15 6l3 3" />
+        <path d="M9 3a2 2 0 0 0 2 2a2 2 0 0 0 -2 2a2 2 0 0 0 -2 -2a2 2 0 0 0 2 -2" />
+        <path d="M19 13a2 2 0 0 0 2 2a2 2 0 0 0 -2 2a2 2 0 0 0 -2 -2a2 2 0 0 0 2 -2" />
+      </symbol>
+      <symbol id="ic-copy" viewBox="0 0 24 24">
+        <path d="M7 7m0 2.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z" />
+        <path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" />
+      </symbol>
+      <symbol id="ic-download" viewBox="0 0 24 24">
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" />
+        <path d="M7 11l5 5l5 -5" />
+        <path d="M12 4l0 12" />
+      </symbol>
+      <symbol id="ic-clipboard" viewBox="0 0 24 24">
+        <path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" />
+        <path d="M9 3m0 2a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v0a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2z" />
+      </symbol>
+      <symbol id="ic-folder" viewBox="0 0 24 24">
+        <path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2" />
+      </symbol>
+      <symbol id="ic-trash" viewBox="0 0 24 24">
+        <path d="M4 7l16 0" />
+        <path d="M10 11l0 6" />
+        <path d="M14 11l0 6" />
+        <path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12" />
+        <path d="M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3" />
+      </symbol>
+      <symbol id="ic-alert" viewBox="0 0 24 24">
+        <path d="M12 9v4" />
+        <path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0z" />
+        <path d="M12 16h.01" />
+      </symbol>
+      <symbol id="ic-check" viewBox="0 0 24 24">
+        <path d="M5 12l5 5l10 -10" />
+      </symbol>
+      <symbol id="ic-chevron-down" viewBox="0 0 24 24">
+        <path d="M6 9l6 6l6 -6" />
+      </symbol>
+      <symbol id="ic-arrow-right" viewBox="0 0 24 24">
+        <path d="M5 12l14 0" />
+        <path d="M13 18l6 -6" />
+        <path d="M13 6l6 6" />
+      </symbol>
+      <symbol id="ic-upload" viewBox="0 0 24 24">
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" />
+        <path d="M7 9l5 -5l5 5" />
+        <path d="M12 4l0 12" />
+      </symbol>
+      <symbol id="ic-sort" viewBox="0 0 24 24">
+        <path d="M4 6l7 0" />
+        <path d="M4 12l7 0" />
+        <path d="M4 18l9 0" />
+        <path d="M15 9l3 -3l3 3" />
+        <path d="M18 6l0 12" />
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="plugin-app">
+    <header class="app-header">
+      <div class="tabs" role="tablist" aria-label="核心功能">
+        <button id="tab-format" class="tab-btn is-active" role="tab" type="button" aria-selected="true" aria-controls="panel-format" data-tab="format">
+          <svg class="icon" aria-hidden="true"><use href="#ic-braces" /></svg>
+          <span>JSON 格式化</span>
+        </button>
+        <button id="tab-img2json" class="tab-btn" role="tab" type="button" aria-selected="false" aria-controls="panel-img2json" data-tab="img2json">
+          <svg class="icon" aria-hidden="true"><use href="#ic-photo-up" /></svg>
+          <span>图片转 JSON</span>
+        </button>
+        <button id="tab-json2img" class="tab-btn" role="tab" type="button" aria-selected="false" aria-controls="panel-json2img" data-tab="json2img">
+          <svg class="icon" aria-hidden="true"><use href="#ic-photo-down" /></svg>
+          <span>JSON 转图片</span>
+        </button>
+      </div>
+      <div class="header-right">
+        <span id="global-status" class="status-chip" role="status" aria-live="polite">等待输入</span>
+        <button id="in-plugin-theme-toggle" class="icon-btn" type="button" aria-label="切换深浅主题" title="切换深浅主题">
+          <svg id="in-plugin-theme-icon" class="icon" aria-hidden="true"><use href="#ic-moon" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- TAB 1: JSON FORMATTER -->
+      <section id="panel-format" class="tab-panel" role="tabpanel" aria-labelledby="tab-format">
+        <div class="action-strip">
+          <div class="strip-group">
+            <button id="fmt-btn-format" class="btn btn-primary" type="button" title="格式化 JSON (Ctrl+Enter)">
+              <svg class="icon" aria-hidden="true"><use href="#ic-wand" /></svg>
+              <span>格式化</span>
+            </button>
+            <button id="fmt-btn-minify" class="btn" type="button" title="压缩为单行 (Ctrl+Shift+M)">压缩</button>
+            <button id="fmt-btn-sort" class="btn" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#ic-sort" /></svg>
+              <span>键名排序</span>
+            </button>
+            <button id="fmt-btn-escape" class="btn" type="button">转义</button>
+            <button id="fmt-btn-unescape" class="btn" type="button">去转义</button>
+            <div class="seg" role="group" aria-label="缩进格式">
+              <button id="fmt-indent-2" type="button" aria-pressed="true" data-indent="2">2 空格</button>
+              <button id="fmt-indent-4" type="button" aria-pressed="false" data-indent="4">4 空格</button>
+              <button id="fmt-indent-tab" type="button" aria-pressed="false" data-indent="tab">Tab</button>
+            </div>
+          </div>
+          <div class="strip-group">
+            <div class="seg" role="group" aria-label="输出视图">
+              <button id="fmt-view-code" type="button" aria-pressed="true">代码</button>
+              <button id="fmt-view-tree" type="button" aria-pressed="false">树形</button>
+            </div>
+            <button id="fmt-btn-sample" class="btn btn-ghost" type="button">载入示例</button>
+            <button id="fmt-btn-clear" class="btn btn-ghost" type="button">清空</button>
+          </div>
+        </div>
+
+        <div class="split-45-55">
+          <!-- Left Pane: Raw JSON -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <label class="pane-title" for="fmt-input">原始 JSON</label>
+              </div>
+              <div class="pane-actions">
+                <button id="fmt-btn-paste" class="btn btn-sm" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-clipboard" /></svg>
+                  <span>粘贴</span>
+                </button>
+                <button id="fmt-btn-open" class="btn btn-sm" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-folder" /></svg>
+                  <span>打开 .json</span>
+                </button>
+                <input id="fmt-file" type="file" accept=".json,application/json,text/plain" hidden>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="code-shell is-editor">
+                <textarea id="fmt-input" class="code-textarea" spellcheck="false" placeholder="粘贴、输入或拖入 .json 文件进行格式化与校验..."></textarea>
+              </div>
+              <div id="fmt-error" class="diag-banner" role="alert" hidden>
+                <div class="diag-msg">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-alert" /></svg>
+                  <span id="fmt-error-text"></span>
+                </div>
+                <button id="fmt-btn-locate" class="btn btn-sm" type="button">定位到出错行</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Pane: Output -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <h2 class="pane-title">输出结果</h2>
+                <div class="pane-metrics">
+                  <span id="fmt-stat-nodes" class="metric-pill">0 节点</span>
+                  <span id="fmt-stat-depth" class="metric-pill">深度 0</span>
+                  <span id="fmt-stat-size" class="metric-pill">0 B</span>
+                </div>
+              </div>
+              <div class="pane-actions">
+                <button id="fmt-btn-copy" class="btn btn-sm" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-copy" /></svg>
+                  <span>复制</span>
+                </button>
+                <button id="fmt-btn-download" class="btn btn-sm" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-download" /></svg>
+                  <span>下载 .json</span>
+                </button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div id="fmt-empty" class="empty-state" hidden>
+                <span class="empty-icon"><svg><use href="#ic-braces" /></svg></span>
+                <h3>等待输入 JSON</h3>
+                <p>在左侧粘贴或拖入 JSON 文件，也可点击上方「载入示例」体验格式化与树形检视。</p>
+              </div>
+
+              <div id="fmt-code-view" class="code-shell is-output">
+                <pre id="fmt-out-code" class="code-pre-wrap"><code></code></pre>
+              </div>
+
+              <div id="fmt-tree-view" class="tree-wrap" hidden>
+                <div class="tree-toolbar">
+                  <span>点击任意键或行复制 JSONPath</span>
+                  <div class="strip-group">
+                    <button id="fmt-tree-expand" class="btn btn-sm" type="button">全部展开</button>
+                    <button id="fmt-tree-collapse" class="btn btn-sm" type="button">全部折叠</button>
+                  </div>
+                </div>
+                <div id="fmt-tree-container" class="tree-scroll"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: IMAGE TO JSON -->
+      <section id="panel-img2json" class="tab-panel" role="tabpanel" aria-labelledby="tab-img2json" hidden>
+        <div class="split-42-58">
+          <!-- Left Pane: Source & Options -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <h2 class="pane-title">图片输入与编码选项</h2>
+              </div>
+              <div class="pane-actions">
+                <button id="i2j-btn-clear" class="btn btn-sm btn-ghost" type="button">清空图片</button>
+              </div>
+            </div>
+            <div class="pane-scroll">
+              <div id="img-dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择或拖拽图片文件到此处">
+                <svg class="icon icon-upload" aria-hidden="true"><use href="#ic-upload" /></svg>
+                <div class="dropzone-title">拖拽或 Ctrl+V 粘贴图片到此处，或点击选择</div>
+                <div class="dropzone-sub">支持 PNG / JPEG / WebP / GIF / SVG，可多选</div>
+                <input id="img-file-input" type="file" accept="image/*" multiple hidden>
+              </div>
+
+              <div class="sample-row">
+                <span class="sample-label">快速示例:</span>
+                <button id="img-sample-badge" class="btn btn-sm" type="button">森系徽标 PNG</button>
+                <button id="img-sample-avatar" class="btn btn-sm" type="button">界面头像 PNG</button>
+                <button id="img-sample-pixel" class="btn btn-sm" type="button">像素叶片 12x12</button>
+              </div>
+
+              <div id="img-list" class="img-list" aria-label="已载入图片列表"></div>
+
+              <div class="config-section">
+                <div class="config-head">
+                  <span class="config-title">JSON 封装方式</span>
+                  <div class="seg" role="group" aria-label="输出模式">
+                    <button id="i2j-mode-base64" type="button" aria-pressed="true">Base64 封装</button>
+                    <button id="i2j-mode-pixel" type="button" aria-pressed="false">像素矩阵</button>
+                  </div>
+                </div>
+
+                <div id="i2j-base64-opts" class="form-grid">
+                  <div class="form-block is-full">
+                    <label class="form-label" for="i2j-structure">JSON 结构模板</label>
+                    <select id="i2j-structure" class="field-select">
+                      <option value="object">完整元信息对象 (name, mime, width, height, dataUrl)</option>
+                      <option value="dict">键值字典 ({ "文件名": "data:image/..." })</option>
+                      <option value="raw">纯 Base64 字段 (name, mime, base64)</option>
+                    </select>
+                  </div>
+                  <div class="form-block">
+                    <label class="form-label" for="i2j-mime">目标输出格式</label>
+                    <select id="i2j-mime" class="field-select">
+                      <option value="original">保持原格式</option>
+                      <option value="image/png">PNG (无损透明)</option>
+                      <option value="image/webp">WebP (高压缩)</option>
+                      <option value="image/jpeg">JPEG (白底有损)</option>
+                    </select>
+                  </div>
+                  <div class="form-block">
+                    <label class="form-label" for="i2j-resize">尺寸缩放限制</label>
+                    <select id="i2j-resize" class="field-select">
+                      <option value="0">原始尺寸</option>
+                      <option value="512">最大边 512px</option>
+                      <option value="256">最大边 256px</option>
+                      <option value="128">最大边 128px</option>
+                    </select>
+                  </div>
+                  <div class="form-block is-full">
+                    <label class="form-label" for="i2j-quality">
+                      <span>压缩质量 (WebP / JPEG 生效)</span>
+                      <span id="i2j-quality-val" class="range-val">90%</span>
+                    </label>
+                    <div class="range-wrap">
+                      <input id="i2j-quality" type="range" min="0.4" max="1" step="0.05" value="0.9">
+                    </div>
+                  </div>
+                  <div class="form-block is-full">
+                    <label class="field-check">
+                      <input id="i2j-keep-prefix" type="checkbox" checked>
+                      <span>保留 data:image/...;base64, 前缀</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div id="i2j-pixel-opts" class="form-grid" hidden>
+                  <div class="form-block is-full">
+                    <span class="form-label">像素采样网格尺寸</span>
+                    <div class="seg" role="group" aria-label="像素采样尺寸">
+                      <button type="button" class="i2j-grid-btn" data-grid="8" aria-pressed="false">8x8</button>
+                      <button type="button" class="i2j-grid-btn" data-grid="16" aria-pressed="true">16x16</button>
+                      <button type="button" class="i2j-grid-btn" data-grid="24" aria-pressed="false">24x24</button>
+                      <button type="button" class="i2j-grid-btn" data-grid="32" aria-pressed="false">32x32</button>
+                    </div>
+                  </div>
+                  <div class="form-block is-full">
+                    <p class="helper-note">将图片重采样为量化调色板索引矩阵 (type: "pixel-grid")，体积紧凑可读，并在「JSON 转图片」中支持像素级还原。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Pane: Generated JSON -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <h2 class="pane-title">生成 JSON</h2>
+                <div class="pane-metrics">
+                  <span id="i2j-stat-size" class="metric-pill">0 B</span>
+                  <span id="i2j-stat-extra" class="metric-pill">等待载入</span>
+                </div>
+              </div>
+              <div class="pane-actions">
+                <label class="field-check" title="仅折叠预览显示，复制与下载始终使用完整数据">
+                  <input id="i2j-fold-b64" type="checkbox" checked>
+                  <span>折叠超长 Base64 预览</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="pane-body">
+              <div id="i2j-empty" class="empty-state" hidden>
+                <span class="empty-icon"><svg><use href="#ic-photo-up" /></svg></span>
+                <h3>尚未选择图片</h3>
+                <p>拖拽、粘贴剪贴板图片到左侧区域，或点击示例按钮，即可实时编码为结构化 JSON 或像素矩阵。</p>
+              </div>
+
+              <div id="i2j-skeleton" class="skeleton-box" hidden>
+                <div class="skel-line skel-w-42"></div>
+                <div class="skel-line skel-w-76"></div>
+                <div class="skel-line skel-w-68"></div>
+                <div class="skel-line skel-w-90"></div>
+                <div class="skel-line skel-w-55"></div>
+              </div>
+
+              <div id="i2j-output-wrap" class="code-shell is-output">
+                <pre id="i2j-out-code" class="code-pre-wrap"><code></code></pre>
+              </div>
+            </div>
+
+            <div class="pane-footer">
+              <div class="strip-group">
+                <button id="i2j-btn-copy" class="btn btn-primary" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-copy" /></svg>
+                  <span>复制 JSON</span>
+                </button>
+                <button id="i2j-btn-download" class="btn" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-download" /></svg>
+                  <span>下载 .json</span>
+                </button>
+              </div>
+              <div class="strip-group">
+                <button id="i2j-btn-to-fmt" class="btn btn-sm" type="button">发送到格式化</button>
+                <button id="i2j-btn-to-j2i" class="btn btn-sm" type="button">
+                  <span>发送到 JSON 转图片</span>
+                  <svg class="icon" aria-hidden="true"><use href="#ic-arrow-right" /></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: JSON TO IMAGE -->
+      <section id="panel-json2img" class="tab-panel" role="tabpanel" aria-labelledby="tab-json2img" hidden>
+        <div class="action-strip">
+          <div class="strip-group">
+            <span class="sample-label strip-label-strong">转换模式:</span>
+            <div class="seg" role="group" aria-label="JSON 转图片模式">
+              <button id="j2i-mode-decode" type="button" aria-pressed="true">解码还原图片</button>
+              <button id="j2i-mode-card" type="button" aria-pressed="false">渲染 JSON 图卡</button>
+            </div>
+          </div>
+          <div class="strip-group">
+            <button id="j2i-btn-sample-img" class="btn btn-sm" type="button">载入含图示例</button>
+            <button id="j2i-btn-sample-px" class="btn btn-sm" type="button">载入像素示例</button>
+            <button id="j2i-btn-clear" class="btn btn-sm btn-ghost" type="button">清空</button>
+          </div>
+        </div>
+
+        <div class="split-42-58">
+          <!-- Left Pane: JSON Input -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <label class="pane-title" for="j2i-input">待转换 JSON</label>
+              </div>
+              <div class="pane-actions">
+                <button id="j2i-btn-paste" class="btn btn-sm" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-clipboard" /></svg>
+                  <span>粘贴</span>
+                </button>
+              </div>
+            </div>
+            <div class="pane-body">
+              <div class="code-shell is-editor">
+                <textarea id="j2i-input" class="code-textarea" spellcheck="false" placeholder="粘贴 JSON、data:image / Base64 图片字符串，或拖入 .json 文件..."></textarea>
+              </div>
+              <div id="j2i-status-banner" class="diag-banner is-warn">
+                <div class="diag-msg">
+                  <svg id="j2i-status-icon" class="icon" aria-hidden="true"><use href="#ic-alert" /></svg>
+                  <span id="j2i-status-text">等待输入 JSON 内容</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Pane: Preview & Export -->
+          <div class="pane">
+            <div class="pane-head">
+              <div class="pane-title-wrap">
+                <h2 class="pane-title">图片预览与导出</h2>
+              </div>
+              <div class="pane-actions">
+                <span id="j2i-mode-tag" class="metric-pill mode-tag-pill">还原模式</span>
+              </div>
+            </div>
+
+            <!-- Sub-pane A: Decode Images -->
+            <div id="j2i-decode-pane" class="pane-body">
+              <div id="j2i-thumb-strip" class="thumb-strip" hidden></div>
+
+              <div class="stage-toolbar">
+                <div class="strip-group">
+                  <span class="sample-label">画布底色:</span>
+                  <div class="seg" role="group" aria-label="画布背景">
+                    <button id="j2i-bg-checker" type="button" aria-pressed="true">棋盘格</button>
+                    <button id="j2i-bg-light" type="button" aria-pressed="false">浅色底</button>
+                    <button id="j2i-bg-dark" type="button" aria-pressed="false">深色底</button>
+                  </div>
+                </div>
+                <div class="strip-group">
+                  <span class="sample-label">缩放:</span>
+                  <div class="seg" role="group" aria-label="缩放比例">
+                    <button id="j2i-zoom-fit" type="button" aria-pressed="true">适应</button>
+                    <button id="j2i-zoom-100" type="button" aria-pressed="false">100%</button>
+                    <button id="j2i-zoom-200" type="button" aria-pressed="false">200%</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="j2i-stage" class="preview-stage thumb-checker">
+                <img id="j2i-preview-img" alt="解码还原的图片" hidden>
+                <div id="j2i-decode-empty" class="empty-state" hidden>
+                  <span class="empty-icon"><svg><use href="#ic-photo-down" /></svg></span>
+                  <h3 id="j2i-empty-title">未检测到可解码的图片字段</h3>
+                  <p id="j2i-empty-desc">可在左侧传入包含 Base64 图片或 pixel-grid 像素矩阵的 JSON，或直接把这段 JSON 渲染为高颜值代码图卡。</p>
+                  <button id="j2i-switch-to-card" class="btn btn-primary" type="button">改用「渲染 JSON 图卡」生成代码图</button>
+                </div>
+              </div>
+
+              <div class="pane-footer">
+                <span id="j2i-meta" class="footer-meta">等待解析</span>
+                <div class="strip-group">
+                  <button id="j2i-btn-dl-all" class="btn btn-sm" type="button" hidden>下载全部</button>
+                  <button id="j2i-btn-copy-img" class="btn" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#ic-copy" /></svg>
+                    <span>复制图片</span>
+                  </button>
+                  <button id="j2i-btn-dl-img" class="btn btn-primary" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#ic-download" /></svg>
+                    <span>下载图片</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sub-pane B: Render Code Card -->
+            <div id="j2i-card-pane" class="pane-body" hidden>
+              <div class="card-controls">
+                <select id="j2i-card-theme" class="field-select" aria-label="图卡主题">
+                  <option value="sage">森系浅纸</option>
+                  <option value="pine">深松暗夜</option>
+                  <option value="slate">石板冷灰</option>
+                </select>
+                <input id="j2i-card-title" class="field-input input-card-title" type="text" value="response.json" aria-label="图卡标题">
+                <select id="j2i-card-scale" class="field-select" aria-label="导出倍率">
+                  <option value="2">2x 高清</option>
+                  <option value="3">3x 超清</option>
+                </select>
+                <label class="field-check">
+                  <input id="j2i-card-linenos" type="checkbox" checked>
+                  <span>显示行号</span>
+                </label>
+              </div>
+
+              <div id="j2i-card-truncate-note" class="diag-banner is-warn" hidden>
+                <div class="diag-msg">
+                  <svg class="icon" aria-hidden="true"><use href="#ic-alert" /></svg>
+                  <span>内容超过 80 行，图卡预览与导出将自动截取前 80 行以保持排版清晰。</span>
+                </div>
+              </div>
+
+              <div class="card-canvas-wrap">
+                <canvas id="j2i-card-canvas"></canvas>
+              </div>
+
+              <div class="pane-footer">
+                <span id="j2i-card-meta" class="footer-meta">PNG 图卡就绪</span>
+                <div class="strip-group">
+                  <button id="j2i-btn-copy-card" class="btn" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#ic-copy" /></svg>
+                    <span>复制图片</span>
+                  </button>
+                  <button id="j2i-btn-dl-card" class="btn btn-primary" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#ic-download" /></svg>
+                    <span>导出 PNG 图卡</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
