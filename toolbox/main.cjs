@@ -1,7 +1,8 @@
 'use strict';
-const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, screen, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, dialog, shell, screen, Tray, Menu, nativeImage, clipboard } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { uIOhook } = require('uiohook-napi');
 
 const dataRoot = path.join(app.getPath('appData'), 'qingxia');
@@ -62,9 +63,507 @@ else app.on('second-instance', showMain);
 const bundle = app.isPackaged ? path.join(process.resourcesPath, 'bundle') : path.join(__dirname, 'resources');
 const data = app.getPath('userData');
 const settingsFile = path.join(data, 'toolbox.json');
-let settings = { version: 1, plugins: [], panel: [], independent: [], background: [], pluginStartup: [], mainIndependent: false, middle: true, autoStart: false };
+const DEFAULT_GITHUB_REPO = 'https://github.com/lavieheureuse/qingxia';
+const GITHUB_RELEASES_URL = 'https://github.com/lavieheureuse/qingxia/releases';
+const GITHUB_LATEST_API = 'https://api.github.com/repos/lavieheureuse/qingxia/releases/latest';
+const UPDATES_DIR = path.join(data, 'updates');
+let settings = { version: 1, plugins: [], panel: [], independent: [], background: [], pluginStartup: [], mainIndependent: false, middle: true, autoStart: false, autoCheckUpdate: true, skippedVersion: '' };
 try { settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile, 'utf8')) }; } catch (_) {}
 function save() { fs.mkdirSync(data, { recursive: true }); const tmp = settingsFile + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(settings, null, 2)); fs.renameSync(tmp, settingsFile); }
+
+function compareVersions(a, b) {
+  const parse = raw => {
+    const clean = String(raw || '').trim().replace(/^v/i, '').split(/[-+]/)[0];
+    if (!clean) return null;
+    const parts = clean.split('.');
+    if (!parts.length || parts.some(part => !/^\d+$/.test(part))) return null;
+    return parts.map(Number);
+  };
+  const left = parse(a), right = parse(b);
+  if (!left || !right) return 0;
+  const len = Math.max(left.length, right.length);
+  for (let i = 0; i < len; i++) {
+    const x = left[i] || 0, y = right[i] || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+function detectUpdateMode() {
+  if (!app.isPackaged) return 'dev';
+  if (process.env.PORTABLE_EXECUTABLE_FILE && fs.existsSync(process.env.PORTABLE_EXECUTABLE_FILE)) return 'portable';
+  return 'setup';
+}
+
+function isTrustedGithubUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== 'https:') return false;
+    const host = url.hostname.toLowerCase();
+    return host === 'github.com' || host.endsWith('.github.com') || host.endsWith('.githubusercontent.com');
+  } catch (_) {
+    return false;
+  }
+}
+
+function httpsGetFollow(rawUrl, headers, timeoutMs, maxRedirects = 5, onAbort = null) {
+  return new Promise((resolve, reject) => {
+    let settled = false, currentReq = null;
+    const finish = (err, val) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve(val);
+    };
+    if (onAbort) {
+      onAbort(() => {
+        if (currentReq) currentReq.destroy(new Error('已取消下载'));
+        finish(new Error('已取消下载'));
+      });
+    }
+    const visit = (target, depth) => {
+      if (!isTrustedGithubUrl(target)) {
+        finish(new Error('更新地址不受信任，已中止操作。'));
+        return;
+      }
+      const req = require('node:https').get(target, { headers, timeout: timeoutMs }, res => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume();
+          if (depth <= 0) {
+            finish(new Error('更新地址跳转次数过多，请稍后重试。'));
+            return;
+          }
+          let nextUrl;
+          try { nextUrl = new URL(res.headers.location, target).href; }
+          catch (_) { finish(new Error('更新跳转地址无效。')); return; }
+          visit(nextUrl, depth - 1);
+          return;
+        }
+        finish(null, { res, req });
+      });
+      currentReq = req;
+      req.on('timeout', () => {
+        req.destroy(new Error('连接 GitHub 超时，请检查网络后重试。'));
+      });
+      req.on('error', err => finish(err));
+    };
+    visit(rawUrl, maxRedirects);
+  });
+}
+
+function cleanupUpdatesDir() {
+  try {
+    if (!fs.existsSync(UPDATES_DIR)) return;
+    for (const entry of fs.readdirSync(UPDATES_DIR, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!/\.(exe|part|ps1)$/i.test(entry.name)) continue;
+      try { fs.rmSync(path.join(UPDATES_DIR, entry.name), { force: true }); }
+      catch (_) {}
+    }
+  } catch (_) {}
+}
+
+function selectReleaseAsset(assets, mode) {
+  if (!Array.isArray(assets)) return null;
+  const valid = assets.filter(asset =>
+    asset && typeof asset.name === 'string' && /\.exe$/i.test(asset.name)
+    && typeof asset.browser_download_url === 'string' && isTrustedGithubUrl(asset.browser_download_url)
+  );
+  if (!valid.length) return null;
+  let picked = null;
+  if (mode === 'portable') {
+    picked = valid.find(asset => /portable.*\.exe$/i.test(asset.name));
+  } else {
+    picked = valid.find(asset => /setup.*\.exe$/i.test(asset.name)) || valid.find(asset => !/portable/i.test(asset.name));
+  }
+  return picked ? { name: picked.name, size: Number(picked.size) || 0, url: picked.browser_download_url } : null;
+}
+
+let appUpdate = {
+  phase: 'idle',
+  currentVersion: app.getVersion(),
+  latestVersion: '',
+  releaseName: '',
+  publishedAt: '',
+  notes: '',
+  htmlUrl: GITHUB_RELEASES_URL,
+  assetName: '',
+  assetUrl: '',
+  assetSize: 0,
+  mode: detectUpdateMode(),
+  progress: 0,
+  receivedBytes: 0,
+  totalBytes: 0,
+  speedBytes: 0,
+  downloadedPath: '',
+  error: '',
+  checkedAt: 0,
+  silent: false
+};
+let updateCheckPromise = null;
+let downloadAbort = null;
+
+function publicAppUpdate() {
+  return { ...appUpdate };
+}
+
+function updateTrayMenu() {
+  if (!tray || tray.isDestroyed()) return;
+  const items = [];
+  if ((appUpdate.phase === 'available' || appUpdate.phase === 'downloaded') && appUpdate.latestVersion) {
+    items.push({
+      label: appUpdate.phase === 'downloaded' ? `重启安装 v${appUpdate.latestVersion}` : `发现新版本 v${appUpdate.latestVersion}…`,
+      click: () => {
+        showMain();
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('navigate', 'update');
+      }
+    });
+  }
+  items.push({ label: '打开轻匣', click: showMain }, { label: '退出', click: () => app.quit() });
+  tray.setContextMenu(Menu.buildFromTemplate(items));
+}
+
+function broadcastAppUpdate() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-update', publicAppUpdate());
+  }
+  updateTrayMenu();
+}
+
+async function checkAppUpdate({ silent = false } = {}) {
+  if (['downloading', 'downloaded', 'installing'].includes(appUpdate.phase)) return publicAppUpdate();
+  if (updateCheckPromise) return updateCheckPromise;
+  updateCheckPromise = (async () => {
+    const previous = publicAppUpdate();
+    appUpdate = { ...appUpdate, phase: 'checking', error: '', silent, currentVersion: app.getVersion(), mode: detectUpdateMode() };
+    if (!silent) broadcastAppUpdate();
+    try {
+      const { res } = await httpsGetFollow(
+        GITHUB_LATEST_API,
+        { 'User-Agent': 'personal-toolbox', 'Accept': 'application/vnd.github+json' },
+        15000
+      );
+      const chunks = [];
+      let total = 0;
+      await new Promise((resolve, reject) => {
+        res.on('data', chunk => {
+          total += chunk.length;
+          if (total > 5 * 1024 * 1024) {
+            res.destroy(new Error('更新信息体积过大，无法解析。'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', resolve);
+        res.on('error', reject);
+      });
+      if (res.statusCode !== 200) {
+        if (res.statusCode === 403) throw new Error('GitHub 访问频率受限，请稍后重试，或前往发布页手动查看。');
+        if (res.statusCode === 404) throw new Error('暂未找到正式发布版本。');
+        throw new Error('无法检查更新，请检查 GitHub 网络连接后重试。');
+      }
+      const release = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const latestVersion = String(release.tag_name || '').replace(/^v/i, '').trim();
+      if (!latestVersion || compareVersions(latestVersion, app.getVersion()) <= 0) {
+        appUpdate = {
+          ...appUpdate,
+          phase: silent ? 'idle' : 'latest',
+          latestVersion: latestVersion || app.getVersion(),
+          checkedAt: Date.now(),
+          error: ''
+        };
+        if (!silent) broadcastAppUpdate();
+        return publicAppUpdate();
+      }
+      const mode = detectUpdateMode();
+      const asset = selectReleaseAsset(release.assets, mode);
+      const htmlUrl = typeof release.html_url === 'string' && isTrustedGithubUrl(release.html_url)
+        ? release.html_url
+        : GITHUB_RELEASES_URL;
+      const skipped = silent && settings.skippedVersion && settings.skippedVersion === latestVersion;
+      if (!silent && settings.skippedVersion === latestVersion) {
+        settings.skippedVersion = '';
+        try { save(); } catch (_) {}
+      }
+      appUpdate = {
+        ...appUpdate,
+        phase: skipped ? 'idle' : 'available',
+        latestVersion,
+        releaseName: String(release.name || `轻匣 ${latestVersion}`).trim(),
+        publishedAt: String(release.published_at || ''),
+        notes: String(release.body || '').trim(),
+        htmlUrl,
+        assetName: asset ? asset.name : '',
+        assetUrl: asset ? asset.url : '',
+        assetSize: asset ? asset.size : 0,
+        mode,
+        progress: 0,
+        receivedBytes: 0,
+        totalBytes: asset ? asset.size : 0,
+        speedBytes: 0,
+        downloadedPath: '',
+        error: '',
+        checkedAt: Date.now()
+      };
+      broadcastAppUpdate();
+      return publicAppUpdate();
+    } catch (error) {
+      if (silent) {
+        console.error('后台检查更新失败:', error.message);
+        appUpdate = { ...previous, currentVersion: app.getVersion(), mode: detectUpdateMode() };
+        return publicAppUpdate();
+      }
+      const msg = /[\u4e00-\u9fff]/.test(error?.message || '') ? error.message : '无法检查更新，请检查 GitHub 网络连接后重试。';
+      appUpdate = { ...appUpdate, phase: 'error', error: msg, checkedAt: Date.now() };
+      broadcastAppUpdate();
+      return publicAppUpdate();
+    } finally {
+      updateCheckPromise = null;
+    }
+  })();
+  return updateCheckPromise;
+}
+
+async function downloadAppUpdate() {
+  if (!appUpdate.latestVersion) throw new Error('请先检查新版本后再下载。');
+  if (appUpdate.phase === 'downloading' || appUpdate.phase === 'downloaded') return publicAppUpdate();
+  if (appUpdate.mode === 'dev') throw new Error('源码开发模式不支持应用内覆盖升级，请点击打开发布页手动下载。');
+  if (!appUpdate.assetUrl) throw new Error('当前版本未提供匹配的 Windows 安装包，请前往发布页下载。');
+
+  fs.mkdirSync(UPDATES_DIR, { recursive: true });
+  const safeName = path.basename(appUpdate.assetName || `qingxia-${appUpdate.latestVersion}.exe`).replace(/[^A-Za-z0-9._-]/g, '_') || 'qingxia-update.exe';
+  const partPath = path.join(UPDATES_DIR, safeName + '.part');
+  const finalPath = path.join(UPDATES_DIR, safeName);
+  try { fs.rmSync(partPath, { force: true }); } catch (_) {}
+  try { fs.rmSync(finalPath, { force: true }); } catch (_) {}
+
+  let cancelled = false;
+  let activeRes = null;
+  let abortNetwork = null;
+  downloadAbort = () => {
+    cancelled = true;
+    if (abortNetwork) abortNetwork();
+    if (activeRes && !activeRes.destroyed) activeRes.destroy(new Error('已取消下载'));
+  };
+
+  appUpdate = {
+    ...appUpdate,
+    phase: 'downloading',
+    progress: 0,
+    receivedBytes: 0,
+    totalBytes: appUpdate.assetSize || 0,
+    speedBytes: 0,
+    downloadedPath: '',
+    error: ''
+  };
+  broadcastAppUpdate();
+
+  try {
+    const { res } = await httpsGetFollow(
+      appUpdate.assetUrl,
+      { 'User-Agent': 'personal-toolbox' },
+      30000,
+      5,
+      fn => { abortNetwork = fn; }
+    );
+    activeRes = res;
+    if (cancelled) throw new Error('已取消下载');
+    if (res.statusCode !== 200) {
+      res.resume();
+      throw new Error('下载安装包失败，请检查网络连接或前往发布页手动下载。');
+    }
+    const headerLength = Number(res.headers['content-length']) || 0;
+    const totalBytes = headerLength || appUpdate.assetSize || 0;
+    appUpdate.totalBytes = totalBytes;
+
+    const out = fs.createWriteStream(partPath, { flags: 'wx' });
+    let receivedBytes = 0;
+    let lastEmit = 0;
+    let sampleTime = Date.now();
+    let sampleBytes = 0;
+    let speedBytes = 0;
+
+    res.on('data', chunk => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > 1024 * 1024 * 1024) {
+        res.destroy(new Error('安装包体积异常，已中止下载。'));
+        return;
+      }
+      const now = Date.now();
+      const elapsed = now - sampleTime;
+      if (elapsed >= 500) {
+        speedBytes = Math.round(((receivedBytes - sampleBytes) * 1000) / elapsed);
+        sampleTime = now;
+        sampleBytes = receivedBytes;
+      }
+      if (now - lastEmit >= 150) {
+        lastEmit = now;
+        appUpdate.receivedBytes = receivedBytes;
+        appUpdate.speedBytes = speedBytes;
+        appUpdate.progress = totalBytes > 0 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : 0;
+        broadcastAppUpdate();
+      }
+    });
+
+    await require('node:stream/promises').pipeline(res, out);
+    if (cancelled) throw new Error('已取消下载');
+    if (receivedBytes <= 0 || (appUpdate.assetSize > 0 && receivedBytes !== appUpdate.assetSize)) {
+      throw new Error('安装包下载不完整，请重试。');
+    }
+    fs.renameSync(partPath, finalPath);
+    appUpdate = {
+      ...appUpdate,
+      phase: 'downloaded',
+      progress: 100,
+      receivedBytes,
+      totalBytes: receivedBytes,
+      speedBytes: 0,
+      downloadedPath: finalPath,
+      error: ''
+    };
+    broadcastAppUpdate();
+    return publicAppUpdate();
+  } catch (error) {
+    try { fs.rmSync(partPath, { force: true }); } catch (_) {}
+    if (cancelled) {
+      appUpdate = {
+        ...appUpdate,
+        phase: 'available',
+        progress: 0,
+        receivedBytes: 0,
+        speedBytes: 0,
+        error: ''
+      };
+      broadcastAppUpdate();
+      return publicAppUpdate();
+    }
+    const msg = /[\u4e00-\u9fff]/.test(error?.message || '') ? error.message : '下载连接超时，请检查 GitHub 网络连接后重试，或前往发布页手动下载。';
+    appUpdate = {
+      ...appUpdate,
+      phase: 'error',
+      speedBytes: 0,
+      error: msg
+    };
+    broadcastAppUpdate();
+    return publicAppUpdate();
+  } finally {
+    downloadAbort = null;
+  }
+}
+
+function cancelAppUpdateDownload() {
+  if (downloadAbort) {
+    downloadAbort();
+  } else if (appUpdate.phase === 'downloading') {
+    appUpdate = { ...appUpdate, phase: 'available', progress: 0, receivedBytes: 0, speedBytes: 0, error: '' };
+    broadcastAppUpdate();
+  }
+  return publicAppUpdate();
+}
+
+async function installAppUpdate() {
+  if (appUpdate.mode === 'dev') throw new Error('源码开发模式不支持应用内覆盖升级。');
+  if (appUpdate.phase !== 'downloaded' || !appUpdate.downloadedPath || !fs.existsSync(appUpdate.downloadedPath)) {
+    throw new Error('找不到已下载的更新文件，请重新下载。');
+  }
+  const realUpdates = fs.realpathSync(UPDATES_DIR);
+  const realUpdateFile = fs.realpathSync(appUpdate.downloadedPath);
+  if (!realUpdateFile.startsWith(realUpdates + path.sep)) throw new Error('更新文件路径无效。');
+
+  appUpdate = { ...appUpdate, phase: 'installing', error: '' };
+  broadcastAppUpdate();
+
+  const quittingIds = [...pluginViews.keys()];
+  const results = await Promise.allSettled(quittingIds.map(id => {
+    const contents = require('electron').webContents.fromId(id);
+    return contents ? cleanupPlugin(contents) : pluginExitHandlers.has(id) ? Promise.reject(new Error('插件页面已关闭，无法确认后台任务是否停止。')) : Promise.resolve();
+  }));
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) {
+    for (let i = 0; i < quittingIds.length; i++) {
+      if (results[i]?.status !== 'fulfilled') continue;
+      const contents = require('electron').webContents.fromId(quittingIds[i]);
+      if (contents && !contents.isDestroyed()) contents.send('host-plugin-exit-cancelled');
+    }
+    const reason = failed.reason?.message || '插件未能停止后台任务';
+    appUpdate = { ...appUpdate, phase: 'downloaded', error: `插件后台任务未能停止：${reason}` };
+    broadcastAppUpdate();
+    throw new Error(appUpdate.error);
+  }
+
+  const psScript = [
+    "$ErrorActionPreference = 'Stop'",
+    "$mode = $env:QINGXIA_UPDATE_MODE",
+    "$parentPid = [int]$env:QINGXIA_UPDATE_PID",
+    "$updateFile = $env:QINGXIA_UPDATE_FILE",
+    "$appExe = $env:QINGXIA_UPDATE_EXE",
+    "$portableTarget = $env:QINGXIA_UPDATE_PORTABLE",
+    "for ($i = 0; $i -lt 60; $i++) {",
+    "  if (-not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) { break }",
+    "  Start-Sleep -Milliseconds 500",
+    "}",
+    "Start-Sleep -Milliseconds 600",
+    "if ($mode -eq 'setup') {",
+    "  $proc = Start-Process -FilePath $updateFile -ArgumentList '/S' -Wait -PassThru",
+    "  if ($proc.ExitCode -eq 0 -and (Test-Path -LiteralPath $appExe)) {",
+    "    Start-Process -FilePath $appExe",
+    "  }",
+    "} elseif ($mode -eq 'portable' -and $portableTarget) {",
+    "  $replaced = $false",
+    "  for ($i = 0; $i -lt 60; $i++) {",
+    "    try {",
+    "      $tmpNew = $portableTarget + '.new'",
+    "      $bak = $portableTarget + '.bak'",
+    "      Copy-Item -LiteralPath $updateFile -Destination $tmpNew -Force",
+    "      if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }",
+    "      if (Test-Path -LiteralPath $portableTarget) { Move-Item -LiteralPath $portableTarget -Destination $bak -Force }",
+    "      try {",
+    "        Move-Item -LiteralPath $tmpNew -Destination $portableTarget -Force",
+    "      } catch {",
+    "        if ((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $portableTarget)) { Move-Item -LiteralPath $bak -Destination $portableTarget -Force -ErrorAction SilentlyContinue }",
+    "        throw",
+    "      }",
+    "      if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }",
+    "      $replaced = $true",
+    "      break",
+    "    } catch {",
+    "      Start-Sleep -Milliseconds 500",
+    "    }",
+    "  }",
+    "  if ($replaced -and (Test-Path -LiteralPath $portableTarget)) {",
+    "    Start-Process -FilePath $portableTarget",
+    "  }",
+    "}"
+  ].join('\r\n');
+
+  const scriptPath = path.join(UPDATES_DIR, 'apply-update.ps1');
+  fs.writeFileSync(scriptPath, psScript, 'utf8');
+
+  const child = spawn(
+    path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+    {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        QINGXIA_UPDATE_MODE: appUpdate.mode,
+        QINGXIA_UPDATE_PID: String(process.pid),
+        QINGXIA_UPDATE_FILE: realUpdateFile,
+        QINGXIA_UPDATE_EXE: process.execPath,
+        QINGXIA_UPDATE_PORTABLE: process.env.PORTABLE_EXECUTABLE_FILE || ''
+      }
+    }
+  );
+  child.unref();
+
+  quitReady = true;
+  app.quitting = true;
+  setImmediate(() => app.quit());
+  return publicAppUpdate();
+}
 function readPlugin(dir) {
   const root = fs.realpathSync(dir);
   const manifestPath = path.join(root, 'plugin.json');
@@ -319,7 +818,7 @@ async function changePluginFolder(target) {
   return cleanupFailed ? '插件已迁移到新目录，但部分旧插件文件未能清理，请检查原目录。' : '';
 }
 function plugins() { return settings.plugins.flatMap(dir => { try { return [readPlugin(dir)]; } catch (_) { return []; } }); }
-function snapshot() { return { plugins: plugins().map(displayPlugin), panel: settings.panel, mainIndependent: settings.mainIndependent, middle: settings.middle, autoStart: settings.autoStart, version: app.getVersion(), folder: pluginFolder(), appIcon: require('node:url').pathToFileURL(path.join(bundle, 'app-icon.png')).href }; }
+function snapshot() { return { plugins: plugins().map(displayPlugin), panel: settings.panel, mainIndependent: settings.mainIndependent, middle: settings.middle, autoStart: settings.autoStart, autoCheckUpdate: settings.autoCheckUpdate !== false, skippedVersion: settings.skippedVersion || '', defaultGithubUrl: DEFAULT_GITHUB_REPO, releasesUrl: GITHUB_RELEASES_URL, appUpdate: publicAppUpdate(), version: app.getVersion(), folder: pluginFolder(), appIcon: require('node:url').pathToFileURL(path.join(bundle, 'app-icon.png')).href }; }
 function refresh() { for (const win of [mainWindow, panelWindow]) if (win && !win.isDestroyed()) win.webContents.send('updated', snapshot()); }
 function windowForPanel() {
   if (panelWindow && !panelWindow.isDestroyed()) return panelWindow;
@@ -380,7 +879,12 @@ app.whenReady().then(async () => {
   mainWindow.loadFile('index.html'); mainWindow.on('close', e => { if (!app.quitting) { e.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('blur', () => { if (!settings.mainIndependent && !pluginDialogs.has(mainWindow) && !mainWindow.isDestroyed()) mainWindow.hide(); });
   tray = new Tray(nativeImage.createFromPath(path.join(bundle, 'app-icon.png')).resize({ width: 16, height: 16 }));
-  tray.setToolTip('轻匣'); tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开轻匣', click: showMain }, { label: '退出', click: () => app.quit() }])); tray.on('click', showMain);
+  tray.setToolTip('轻匣'); updateTrayMenu(); tray.on('click', showMain);
+  cleanupUpdatesDir();
+  if (settings.autoCheckUpdate !== false) {
+    const timer = setTimeout(() => { checkAppUpdate({ silent: true }).catch(() => {}); }, 3000);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
   for (const dir of settings.pluginStartup) {
     if (!settings.plugins.includes(dir)) continue;
     try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', `后台插件启动失败：${friendlyError(error)}`); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
@@ -449,12 +953,50 @@ async function installPlugins(sources, replace) {
   for (const old of mapping.keys()) {
     try {
       if (!fs.existsSync(old)) continue;
-      if (!realBase || path.dirname(fs.realpathSync(old)).toLowerCase() !== realBase.toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(old)) || fs.lstatSync(old).isSymbolicLink()) { cleanupFailed = true; continue; }
+      if (!isManagedPluginDir(old, realBase)) { cleanupFailed = true; continue; }
       await shell.trashItem(old);
     } catch (error) { console.error('清理旧插件副本失败:', error); cleanupFailed = true; }
   }
   clearGithubStaging(); refresh();
   return { ...snapshot(), ...(cleanupFailed ? { warning: '插件已更新，但部分旧插件文件夹未能移入回收站。请关闭相关程序后检查插件目录。' } : {}) };
+}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isManagedPluginDir(target, realBase) {
+  if (!realBase || !fs.existsSync(target)) return false;
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+  const realTarget = fs.realpathSync(target);
+  return path.dirname(realTarget).toLowerCase() === realBase.toLowerCase() && UUID_RE.test(path.basename(realTarget));
+}
+function closePluginWindow(win) {
+  if (!win || win.isDestroyed()) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false;
+    const done = () => { if (settled) return; settled = true; clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, 5000);
+    win.once('closed', done);
+    win.close();
+  });
+}
+async function cleanOrphanPluginDirs() {
+  const base = pluginFolder();
+  if (!fs.existsSync(base)) return { removed: 0, failed: 0 };
+  const realBase = fs.realpathSync(base);
+  const norm = dir => { try { return fs.realpathSync(dir).toLowerCase(); } catch (_) { return path.resolve(dir).toLowerCase(); } };
+  const active = new Set(settings.plugins.map(norm));
+  const open = new Set([...windows.entries()].filter(([, win]) => win && !win.isDestroyed()).map(([dir]) => norm(dir)));
+  let removed = 0, failed = 0;
+  for (const entry of fs.readdirSync(realBase, { withFileTypes: true })) {
+    const full = path.join(realBase, entry.name);
+    try {
+      if (!isManagedPluginDir(full, realBase)) continue;
+      const key = fs.realpathSync(full).toLowerCase();
+      if (active.has(key) || open.has(key)) continue;
+      await shell.trashItem(full);
+      removed++;
+    } catch (error) { console.error('清理残留插件目录失败:', full, error); failed++; }
+  }
+  return { removed, failed };
 }
 async function toolboxAction(event, action, value) {
   const pluginEntry = [...windows.entries()].find(([dir, win]) => win.webContents === event.sender || pluginMenus.get(dir)?.webContents === event.sender);
@@ -505,10 +1047,43 @@ async function toolboxAction(event, action, value) {
     });
     return installPlugins(sources, !Array.isArray(value) && value?.replace === true);
   }
-  if (action === 'remove') { const win = windows.get(value); if (win && !win.isDestroyed()) { const contents = [...pluginViews.entries()].find(([, owner]) => owner === win); if (contents) await cleanupPlugin(require('electron').webContents.fromId(contents[0])); } settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save(); if (win && !win.isDestroyed()) win.close(); refresh(); return snapshot(); }
+  if (action === 'remove') {
+    const win = windows.get(value);
+    if (win && !win.isDestroyed()) {
+      const contents = [...pluginViews.entries()].find(([, owner]) => owner === win);
+      if (contents) { await cleanupPlugin(require('electron').webContents.fromId(contents[0])); pluginExitHandlers.delete(contents[0]); }
+    }
+    settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save();
+    if (win && !win.isDestroyed()) await closePluginWindow(win);
+    let cleanupFailed = false;
+    try {
+      const base = pluginFolder();
+      if (fs.existsSync(base) && isManagedPluginDir(value, fs.realpathSync(base))) await shell.trashItem(value);
+    } catch (error) { console.error('清理已移除插件副本失败:', error); cleanupFailed = true; }
+    refresh();
+    return { ...snapshot(), ...(cleanupFailed ? { warning: '工具已移除，但旧插件文件夹未能移入回收站。请关闭相关程序后检查插件目录。' } : {}) };
+  }
+  if (action === 'clean-orphans') return cleanOrphanPluginDirs();
   if (action === 'panel') { const valid = new Set(plugins().map(p => p.dir)); settings.panel = value.filter(x => valid.has(x)); save(); refresh(); return snapshot(); }
   if (action === 'middle') { settings.middle = !!value; save(); refresh(); return snapshot(); }
   if (action === 'autostart') { app.setLoginItemSettings({ openAtLogin: !!value }); settings.autoStart = app.getLoginItemSettings().openAtLogin; save(); refresh(); return snapshot(); }
+  if (action === 'auto-check-update') { settings.autoCheckUpdate = !!value; save(); refresh(); return snapshot(); }
+  if (action === 'update-check') return checkAppUpdate({ silent: false });
+  if (action === 'update-download') return downloadAppUpdate();
+  if (action === 'update-cancel') return cancelAppUpdateDownload();
+  if (action === 'update-install') return installAppUpdate();
+  if (action === 'update-skip') {
+    if (typeof value === 'string' && value.trim()) { settings.skippedVersion = value.trim(); save(); }
+    if (appUpdate.phase === 'available') { appUpdate.phase = 'idle'; broadcastAppUpdate(); }
+    refresh();
+    return snapshot();
+  }
+  if (action === 'open-external') {
+    if (typeof value !== 'string' || !isTrustedGithubUrl(value)) throw new Error('不支持打开该链接。');
+    await shell.openExternal(value);
+    return;
+  }
+  if (action === 'copy-text') { if (typeof value === 'string') clipboard.writeText(value); return true; }
   if (action === 'folder') { fs.mkdirSync(pluginFolder(), { recursive: true }); const error = await shell.openPath(pluginFolder()); if (error) throw new Error('无法打开插件目录，请检查文件夹是否可访问。'); return; }
   if (action === 'change-folder') {
     changingFolder = true;
@@ -526,5 +1101,6 @@ ipcMain.on('host-path', (e, name) => { e.returnValue = name === 'pluginData' ? p
 ipcMain.handle('host-dialog', async (e, options) => { const owner = pluginViews.get(e.sender.id) || BrowserWindow.fromWebContents(e.sender); if (owner) pluginDialogs.add(owner); try { const result = await dialog.showOpenDialog(owner, options); return result.canceled ? undefined : result.filePaths; } finally { if (owner) pluginDialogs.delete(owner); } });
 ipcMain.handle('host-open', (e, p) => shell.openPath(p));
 ipcMain.handle('host-show', (e, p) => shell.showItemInFolder(p));
+ipcMain.on('host-hide-main-window', e => { const owner = pluginViews.get(e.sender.id); if (!owner || owner.isDestroyed() || !owner.isVisible()) { e.returnValue = false; return; } e.returnValue = true; setImmediate(() => { if (!owner.isDestroyed()) owner.close(); }); });
 
 }

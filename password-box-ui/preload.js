@@ -92,6 +92,7 @@
         return result;
       });
     },
-    copy: text => host.copyText(text)
+    copy: text => host.copyText(text),
+    hide: () => typeof host.hideMainWindow === 'function' ? !!host.hideMainWindow(true) : false
   });
 })();

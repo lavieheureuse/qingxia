@@ -17,6 +17,7 @@ window.utools = {
   shellOpenPath: file => ipcRenderer.invoke('host-open', file),
   shellShowItemInFolder: file => ipcRenderer.invoke('host-show', file),
   copyText: text => clipboard.writeText(text),
+  hideMainWindow: () => ipcRenderer.sendSync('host-hide-main-window'),
   setExpandHeight: () => {}, setExpendHeight: () => {},
   setPluginBusy: value => ipcRenderer.sendSync('host-plugin-busy', !!value),
   onPluginEnter: callback => window.addEventListener('DOMContentLoaded', () => callback({ code: args('--toolbox-code='), type: 'over' }), { once: true }),

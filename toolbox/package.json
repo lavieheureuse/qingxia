@@ -1,6 +1,6 @@
 {
   "name": "personal-toolbox",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "description": "轻匣工具箱",
   "main": "main.cjs",
   "private": true,

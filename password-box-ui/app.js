@@ -85,7 +85,7 @@ $('#rows').onclick = async event => {
     const next = action === 'delete' ? entries.filter(x => x.id !== id) : entries.map(x => x.id === id ? {...x, favorite: !x.favorite} : x);
     try { window.passwordBox.save(next); entries = next; if (action === 'delete') shown.delete(id); } catch (error) { askConfirm('操作失败', '请检查后重试', error.message, '知道了', false, true); }
   }
-  if (action === 'copy' || action === 'copy-account') { try { window.passwordBox.copy(action === 'copy' ? entry.password : entry.account); toast(action === 'copy' ? '密码已复制' : '账号已复制'); } catch (_) { toast('复制失败'); } }
+  if (action === 'copy' || action === 'copy-account') { try { window.passwordBox.copy(action === 'copy' ? entry.password : entry.account); if (action === 'copy' && window.passwordBox.hide?.()) { render(); return; } toast(action === 'copy' ? '密码已复制' : '账号已复制'); } catch (_) { toast('复制失败'); } }
   render();
 };
 try {
