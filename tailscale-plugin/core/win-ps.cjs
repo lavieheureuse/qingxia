@@ -35,9 +35,15 @@ function isUacCancelledMessage(message) {
 }
 
 function sanitizePowerShellError(raw, errorObj) {
-  const text = String(raw || '').trim();
+  const cleanedRaw = String(raw || '')
+    .replace(/\u0000/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ');
+  const text = cleanedRaw.trim();
   if (isUacCancelledMessage(text)) {
     return '管理员授权已被取消，请在系统 UAC 弹窗中点击“是”以继续操作';
+  }
+  if (/CLR/i.test(text) && /80004005/i.test(text)) {
+    return 'Windows PowerShell (.NET CLR) 初始化失败（HRESULT 80004005），系统资源紧张，请稍后重试或重启轻匣';
   }
   if ((errorObj && (errorObj.killed || errorObj.signal === 'SIGTERM')) || /timed?\s*out/i.test(text)) {
     return '管理员操作超时，请确认是否已通过系统 UAC 授权窗口后重试';

@@ -162,3 +162,71 @@ test('service shutdown stops daemon on exit and propagates error if cleanup fail
     hFail.cleanup();
   }
 });
+
+test('visibility-triggered poll uses lightweight PID check and skips conflict WMI query while manual refresh runs full check', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-svc-poll-'));
+  const getProcessCalls = [];
+  let conflictCalls = 0;
+
+  const service = createService({
+    dataDir: tmpDir,
+    host: { setPluginBusy: () => {}, copyText: () => {}, onPluginExit: () => {} },
+    platform: 'win32',
+    arch: 'x64',
+    store: {
+      load: async () => ({ config: { ...DEFAULT_CONFIG }, authKey: '' }),
+      save: async () => ({ ...DEFAULT_CONFIG }),
+    },
+    binary: {
+      inspectBinaryDir: async (dir) => ({
+        ready: true,
+        dir,
+        tailscaledPath: path.join(dir, 'tailscaled.exe'),
+        tailscalePath: path.join(dir, 'tailscale.exe'),
+        wintunPath: path.join(dir, 'wintun.dll'),
+        missing: [],
+        version: '1.104.7',
+      }),
+    },
+    daemon: {
+      getProcessState: async (opts = {}) => {
+        getProcessCalls.push(Boolean(opts.lightweight));
+        return { running: true, record: { pid: 8899, processName: 'tailscaled', startTicks: '100' } };
+      },
+      checkConflicts: async () => {
+        conflictCalls += 1;
+        return { hasConflict: false, officialServiceRunning: false, officialServiceStatus: '', externalProcesses: [], adapters: [] };
+      },
+      runCli: async () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({ BackendState: 'Running', TUN: true, Self: { HostName: 'pc', TailscaleIPs: ['100.64.0.1'], Online: true } }),
+        stderr: '',
+      }),
+      readDaemonLogs: () => ({ stdout: [], stderr: [] }),
+    },
+    ps: {},
+  });
+
+  try {
+    await service.bootstrap();
+    assert.deepEqual(getProcessCalls, [false]);
+    assert.equal(conflictCalls, 1);
+
+    getProcessCalls.length = 0;
+    conflictCalls = 0;
+
+    service.setWindowVisible(false);
+    service.setWindowVisible(true);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.deepEqual(getProcessCalls, [true]);
+    assert.equal(conflictCalls, 0);
+
+    getProcessCalls.length = 0;
+    await service.refreshStatus();
+    assert.deepEqual(getProcessCalls, [false]);
+    assert.equal(conflictCalls, 1);
+  } finally {
+    service.dispose();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

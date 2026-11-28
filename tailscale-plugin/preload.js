@@ -78,6 +78,7 @@
     'openDataDir',
     'getLogs',
     'clearLogs',
+    'setWindowVisible',
   ];
 
   const bridge = {

@@ -8,7 +8,9 @@ const { parseStatusJson, parsePingOutput, extractAuthUrlFromText } = require('./
 const { analyzeDiagnostics } = require('./diagnostics.cjs');
 const { redactError, redactText } = require('./redact.cjs');
 
-const POLL_INTERVAL_MS = 3000;
+const FOREGROUND_POLL_MS = 5000;
+const BACKGROUND_POLL_MS = 30000;
+const POLL_INTERVAL_MS = FOREGROUND_POLL_MS;
 const MAX_PLUGIN_LOGS = 200;
 
 function createService(deps) {
@@ -69,6 +71,8 @@ function createService(deps) {
   let busyCounter = 0;
   let pollTimer = null;
   let pollInFlight = false;
+  let pollingActive = false;
+  let windowVisible = true;
   let activeUpTask = null;
   let disposed = false;
 
@@ -175,28 +179,34 @@ function createService(deps) {
     return state.binaryInfo;
   }
 
-  async function refreshDaemonStatus({ silent = false } = {}) {
+  function resetStoppedState() {
+    stopPolling();
+    state.phase = state.lastError ? 'error' : 'stopped';
+    state.backendState = 'Stopped';
+    state.tun = false;
+    state.tunWarning = false;
+    state.needsMachineAuth = false;
+    state.authUrl = '';
+    state.self = { hostName: '', dnsName: '', ipv4: '', ips: [], os: '', online: false };
+    state.peers = [];
+    state.summary = { totalPeers: 0, onlinePeers: 0, directPeers: 0, derpPeers: 0 };
+    state.health = [];
+  }
+
+  async function refreshDaemonStatus({ silent = false, checkConflicts = true, lightweight = false } = {}) {
     if (disposed) return getSnapshot();
-    const procState = await daemon.getProcessState();
+    const procState = await daemon.getProcessState({ lightweight });
     state.daemonRunning = procState.running;
     state.pid = procState.record ? procState.record.pid : null;
 
     if (!procState.running) {
-      stopPolling();
-      state.phase = state.lastError ? 'error' : 'stopped';
-      state.backendState = 'Stopped';
-      state.tun = false;
-      state.tunWarning = false;
-      state.needsMachineAuth = false;
-      state.authUrl = '';
-      state.self = { hostName: '', dnsName: '', ipv4: '', ips: [], os: '', online: false };
-      state.peers = [];
-      state.summary = { totalPeers: 0, onlinePeers: 0, directPeers: 0, derpPeers: 0 };
-      state.health = [];
-      try {
-        state.conflicts = await daemon.checkConflicts(null);
-      } catch (_) {
-        /* ignore conflict query errors during idle */
+      resetStoppedState();
+      if (checkConflicts) {
+        try {
+          state.conflicts = await daemon.checkConflicts(null);
+        } catch (_) {
+          /* ignore conflict query errors during idle */
+        }
       }
       if (!silent) emitState();
       return getSnapshot();
@@ -227,43 +237,84 @@ function createService(deps) {
         } catch (err) {
           appendLog('warn', `解析状态失败：${redactError(err)}`);
         }
-      } else if (cliRes.exitCode !== 0 && cliRes.stderr) {
-        const errUrl = extractAuthUrlFromText(cliRes.stderr);
+      } else {
+        const errUrl = cliRes.exitCode !== 0 && cliRes.stderr ? extractAuthUrlFromText(cliRes.stderr) : '';
         if (errUrl) {
           state.phase = 'needs_login';
           state.authUrl = errUrl;
+        } else if (lightweight && cliRes.exitCode !== 0) {
+          const verified = await daemon.getProcessState({ lightweight: false });
+          if (!verified.running) {
+            state.daemonRunning = false;
+            state.pid = null;
+            resetStoppedState();
+            if (!silent) emitState();
+            return getSnapshot();
+          }
         }
       }
     }
 
-    try {
-      state.conflicts = await daemon.checkConflicts(state.pid);
-    } catch (_) {
-      /* ignore */
+    if (checkConflicts) {
+      try {
+        state.conflicts = await daemon.checkConflicts(state.pid);
+      } catch (_) {
+        /* ignore */
+      }
     }
     if (!silent) emitState();
     return getSnapshot();
   }
 
+  async function runPollTick() {
+    if (pollInFlight || state.exiting || disposed || !pollingActive) return;
+    pollInFlight = true;
+    try {
+      await refreshDaemonStatus({ silent: false, checkConflicts: false, lightweight: true });
+    } catch (err) {
+      appendLog('warn', `状态轮询异常：${redactError(err)}`);
+    } finally {
+      pollInFlight = false;
+      scheduleNextPoll();
+    }
+  }
+
+  function scheduleNextPoll() {
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    if (!pollingActive || disposed || state.exiting) return;
+    const delay = windowVisible ? FOREGROUND_POLL_MS : BACKGROUND_POLL_MS;
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      runPollTick();
+    }, delay);
+  }
+
   function startPolling() {
-    if (pollTimer || disposed) return;
-    pollTimer = setInterval(async () => {
-      if (pollInFlight || state.exiting || disposed) return;
-      pollInFlight = true;
-      try {
-        await refreshDaemonStatus({ silent: false });
-      } catch (err) {
-        appendLog('warn', `状态轮询异常：${redactError(err)}`);
-      } finally {
-        pollInFlight = false;
-      }
-    }, POLL_INTERVAL_MS);
+    if (pollingActive || disposed) return;
+    pollingActive = true;
+    scheduleNextPoll();
   }
 
   function stopPolling() {
+    pollingActive = false;
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
+    }
+  }
+
+  function setWindowVisible(visible) {
+    const nextVisible = Boolean(visible);
+    if (nextVisible === windowVisible) return;
+    windowVisible = nextVisible;
+    if (pollingActive && !disposed && !state.exiting) {
+      scheduleNextPoll();
+      if (nextVisible && !pollInFlight) {
+        runPollTick();
+      }
     }
   }
 
@@ -667,11 +718,14 @@ function createService(deps) {
     clearLogs,
     shutdown,
     resumeAfterCancelledExit,
+    setWindowVisible,
     dispose,
   };
 }
 
 module.exports = {
+  FOREGROUND_POLL_MS,
+  BACKGROUND_POLL_MS,
   POLL_INTERVAL_MS,
   createService,
 };

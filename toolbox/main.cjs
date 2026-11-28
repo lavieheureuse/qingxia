@@ -735,12 +735,14 @@ function cleanupPlugin(contents) {
   if (!pluginExitHandlers.has(contents.id)) return Promise.resolve();
   if (pluginExitRunning.has(contents.id)) return pluginExitRunning.get(contents.id);
   const promise = new Promise((resolve, reject) => {
-    if (contents.isDestroyed()) { reject(new Error('插件页面已关闭，无法确认后台任务是否停止。')); return; }
+    if (contents.isDestroyed() || contents.isCrashed()) { reject(new Error('插件页面已关闭或崩溃，无法确认后台任务是否停止。')); return; }
     const id = require('node:crypto').randomUUID();
-    const finish = error => { clearTimeout(timer); contents.removeListener('destroyed', destroyed); pluginExitPending.delete(id); if (error) reject(error); else resolve(); };
+    const finish = error => { clearTimeout(timer); contents.removeListener('destroyed', destroyed); contents.removeListener('render-process-gone', crashed); pluginExitPending.delete(id); if (error) reject(error); else resolve(); };
     const destroyed = () => finish(new Error('插件页面意外关闭，无法确认后台任务是否停止。'));
+    const crashed = () => finish(new Error('插件页面意外崩溃，无法确认后台任务是否停止。'));
     const timer = setTimeout(() => finish(new Error('插件停止后台任务超时。')), 120000);
     contents.once('destroyed', destroyed);
+    contents.once('render-process-gone', crashed);
     pluginExitPending.set(id, { sender: contents.id, finish });
     try { contents.send('host-plugin-exit', id); } catch (error) { finish(error); }
   }).finally(() => pluginExitRunning.delete(contents.id));
@@ -828,13 +830,48 @@ function handleGlobalMouseDown(event) {
 }
 function openPlugin(dir, background = false) {
   const plugin = plugins().find(p => p.dir === dir); if (!plugin) throw new Error('工具不存在');
-  if (windows.has(dir) && !windows.get(dir).isDestroyed()) { if (!background) { windows.get(dir).show(); windows.get(dir).focus(); } return; }
+  if (windows.has(dir) && !windows.get(dir).isDestroyed()) {
+    const existingWin = windows.get(dir);
+    const existingView = existingWin.getBrowserViews().find(v => v !== pluginMenus.get(dir));
+    if (existingView && !existingView.webContents.isDestroyed() && existingView.webContents.isCrashed()) {
+      existingView.webContents.loadFile(plugin.main).catch(error => console.error('重载崩溃插件失败:', error));
+    }
+    if (!background) { existingWin.show(); existingWin.focus(); }
+    return;
+  }
   const pluginDataRoot = preparePluginData(plugin);
   if (pluginDataRoot === null) return;
   const win = new BrowserWindow({ width: 900, height: 760, minWidth: 650, minHeight: 500, show: !background, title: plugin.name, icon: path.join(bundle, 'app-icon.ico'), titleBarStyle: 'hidden', titleBarOverlay: { color: '#faf8f4', symbolColor: '#163529', height: 36 }, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: false } });
   const view = new BrowserView({ webPreferences: { preload: path.join(__dirname, 'plugin-preload.cjs'), sandbox: false, contextIsolation: false, nodeIntegration: false, backgroundThrottling: false, additionalArguments: ['--toolbox-plugin=' + encodeURIComponent(plugin.preload), '--toolbox-code=' + encodeURIComponent(plugin.code), '--toolbox-browser=' + encodeURIComponent(path.join(bundle, 'chromium', 'chrome.exe'))] } });
   view.webContents.on('did-finish-load', () => { view.webContents.insertCSS('::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#b8c8b9;border:2px solid transparent;border-radius:8px;background-clip:padding-box}::-webkit-scrollbar-thumb:hover{background:#87a48c;border:2px solid transparent;background-clip:padding-box}::-webkit-scrollbar-corner{background:transparent}').catch(error => console.error('设置滚动条样式失败:', error)); });
   const contents = view.webContents;
+  const crashTimes = [];
+  contents.on('render-process-gone', async (_event, details) => {
+    pluginExitHandlers.delete(contents.id);
+    pluginOperations.delete(contents.id);
+    for (const [, pending] of pluginExitPending.entries()) {
+      if (pending.sender === contents.id) pending.finish(new Error('插件页面意外崩溃，无法确认后台任务是否停止。'));
+    }
+    if (app.quitting || win.isDestroyed() || (details && details.reason === 'clean-exit')) return;
+    console.error('插件渲染进程异常退出:', plugin.name, details?.reason, details?.exitCode);
+    const now = Date.now();
+    while (crashTimes.length && now - crashTimes[0] >= 60000) crashTimes.shift();
+    if (crashTimes.length < 2) {
+      crashTimes.push(now);
+      setTimeout(() => {
+        if (!win.isDestroyed() && !contents.isDestroyed()) {
+          contents.loadFile(plugin.main).catch(err => console.error('自动重载插件失败:', err));
+        }
+      }, 300);
+    } else if (win.isVisible()) {
+      pluginDialogs.add(win);
+      try {
+        await dialog.showMessageBox(win, { type: 'error', message: `${plugin.name} 页面多次崩溃`, detail: '请关闭并重新打开此插件，或检查系统资源与插件运行日志。' });
+      } finally {
+        pluginDialogs.delete(win);
+      }
+    }
+  });
   win.setMenu(null);
   windows.set(dir, win); pluginViews.set(contents.id, win); if (pluginDataRoot) pluginDataRoots.set(contents.id, pluginDataRoot);
   win.setBrowserView(view);

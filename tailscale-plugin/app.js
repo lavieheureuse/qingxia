@@ -6,6 +6,7 @@
   const $ = (selector) => document.querySelector(selector);
 
   let currentState = null;
+  let pendingState = null;
   let peerFilter = 'all';
   let toastTimer = null;
 
@@ -410,18 +411,44 @@
     if ($('#logs-panel').open) refreshLogsView();
   });
 
+  function syncVisibility() {
+    if (!api || typeof api.setWindowVisible !== 'function') return;
+    try {
+      api.setWindowVisible(!document.hidden);
+    } catch (_) {
+      /* 忽略 */
+    }
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    syncVisibility();
+    if (!document.hidden && pendingState) {
+      const next = pendingState;
+      pendingState = null;
+      render(next);
+    }
+  });
+
   (async () => {
     if (!api) {
       showToast('未检测到轻匣插件运行环境，请在轻匣中打开本插件。', 'error');
       return;
     }
-    api.onState((next) => render(next));
+    api.onState((next) => {
+      if (document.hidden) {
+        pendingState = next;
+        return;
+      }
+      pendingState = null;
+      render(next);
+    });
     api.onLog(() => {
-      if ($('#logs-panel').open) refreshLogsView();
+      if (!document.hidden && $('#logs-panel').open) refreshLogsView();
     });
     try {
       const initial = await api.bootstrap();
       render(initial);
+      syncVisibility();
       await refreshLogsView();
       if (initial.binaryInfo && !initial.binaryInfo.ready) {
         $('#kernel-panel').open = true;

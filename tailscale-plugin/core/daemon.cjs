@@ -61,7 +61,18 @@ function readTailLines(filePath, maxLines = 120) {
   }
 }
 
-function createDaemonManager({ dataDir, ps, execFileImpl = execFile, spawnImpl = spawn, logger = () => {} }) {
+function isPidAliveFast(pid) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0) return false;
+  try {
+    process.kill(num, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+function createDaemonManager({ dataDir, ps, execFileImpl = execFile, spawnImpl = spawn, isPidAliveImpl = isPidAliveFast, logger = () => {} }) {
   if (!dataDir) throw new Error('dataDir 不能为空');
   if (!ps) throw new Error('ps 工具模块不能为空');
 
@@ -116,9 +127,12 @@ function createDaemonManager({ dataDir, ps, execFileImpl = execFile, spawnImpl =
     return out ? JSON.parse(out) : { exists: false };
   }
 
-  async function getProcessState() {
+  async function getProcessState({ lightweight = false } = {}) {
     const saved = readProcessRecord();
     if (!saved) return { running: false, record: null };
+    if (lightweight && isPidAliveImpl(saved.pid)) {
+      return { running: true, record: saved };
+    }
     const snap = await inspectLivePid(saved.pid);
     if (!snap.exists) {
       clearProcessRecord();
@@ -530,5 +544,6 @@ module.exports = {
   validateProcessRecord,
   verifyProcessIdentity,
   isOwnOrphanCommandLine,
+  isPidAliveFast,
   createDaemonManager,
 };

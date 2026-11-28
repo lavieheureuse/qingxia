@@ -209,3 +209,51 @@ test('startInteractiveUp passes --unattended so tailscaled stays connected after
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('sanitizePowerShellError strips NUL bytes and maps CLR HRESULT 80004005', () => {
+  const utf16Garbled = '\u0000C\u0000L\u0000R\u0000 \u0000H\u0000R\u0000E\u0000S\u0000U\u0000L\u0000T\u0000 \u000080004005';
+  const msg = sanitizePowerShellError(utf16Garbled);
+  assert.equal(msg.includes('\u0000'), false);
+  assert.match(msg, /HRESULT 80004005/);
+});
+
+test('getProcessState({ lightweight: true }) avoids PowerShell when PID is alive and falls back when dead', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-lw-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, 'run'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'run', 'process.json'), JSON.stringify({
+      pid: 4242,
+      processName: 'tailscaled',
+      startTicks: '638900000000000000',
+      cimTicks: '638900000000000000',
+      tun: 'Tailscale',
+    }));
+
+    let psCalls = 0;
+    let alive = true;
+    const daemon = createDaemonManager({
+      dataDir: tmpDir,
+      isPidAliveImpl: () => alive,
+      ps: {
+        psQuote: (s) => `'${s}'`,
+        runPowerShell: async () => {
+          psCalls += 1;
+          return JSON.stringify({ exists: false });
+        },
+      },
+    });
+
+    const first = await daemon.getProcessState({ lightweight: true });
+    assert.equal(first.running, true);
+    assert.equal(first.record.pid, 4242);
+    assert.equal(psCalls, 0);
+
+    alive = false;
+    const second = await daemon.getProcessState({ lightweight: true });
+    assert.equal(second.running, false);
+    assert.equal(psCalls, 1);
+    assert.equal(fs.existsSync(path.join(tmpDir, 'run', 'process.json')), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
