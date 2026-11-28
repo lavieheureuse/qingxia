@@ -1,0 +1,164 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      signing_policy:
+        description: 'SignPath signing policy (requires SIGNPATH_ORGANIZATION_ID and SIGNPATH_API_TOKEN)'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - test-signing
+          - release-signing
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'toolbox/package-lock.json'
+
+      - name: Read toolbox version
+        id: meta
+        run: |
+          $pkg = Get-Content 'toolbox/package.json' -Raw | ConvertFrom-Json
+          if (-not $pkg.version) {
+            throw 'Missing version in toolbox/package.json'
+          }
+          "version=$($pkg.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Detected toolbox version: $($pkg.version)"
+
+      - name: Install dependencies
+        working-directory: toolbox
+        run: npm ci
+
+      - name: Build unsigned Windows packages
+        working-directory: toolbox
+        env:
+          CSC_LINK: ""
+          CSC_KEY_PASSWORD: ""
+        run: npx electron-builder --win nsis portable
+
+      - name: Normalize unsigned installer filenames
+        run: |
+          $ver = '${{ steps.meta.outputs.version }}'
+          $setupSrc = Join-Path 'toolbox/dist' "轻匣 Setup $ver.exe"
+          $portableSrc = Join-Path 'toolbox/dist' "轻匣 $ver.exe"
+          if (-not (Test-Path $setupSrc)) {
+            throw "Expected NSIS installer not found: $setupSrc"
+          }
+          if (-not (Test-Path $portableSrc)) {
+            throw "Expected portable executable not found: $portableSrc"
+          }
+          New-Item -ItemType Directory -Path 'release-unsigned' -Force | Out-Null
+          Copy-Item -LiteralPath $setupSrc -Destination (Join-Path 'release-unsigned' "qingxia-$ver-setup.exe") -Force
+          Copy-Item -LiteralPath $portableSrc -Destination (Join-Path 'release-unsigned' "qingxia-$ver-portable.exe") -Force
+          Get-ChildItem 'release-unsigned' | Format-Table Name, Length -AutoSize
+
+      - name: Upload unsigned artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: qingxia-unsigned-windows
+          path: release-unsigned/*.exe
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        id: signpath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && (github.event_name != 'workflow_dispatch' || inputs.signing_policy != 'none') }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'qingxia' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG || 'windows-installers' }}
+          signing-policy-slug: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_policy || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: release-signed
+
+      - name: Prepare final release artifacts and SHA256SUMS
+        run: |
+          $ver = '${{ steps.meta.outputs.version }}'
+          $setupName = "qingxia-$ver-setup.exe"
+          $portableName = "qingxia-$ver-portable.exe"
+          New-Item -ItemType Directory -Path 'release-final' -Force | Out-Null
+
+          $signedFiles = @()
+          if (Test-Path 'release-signed') {
+            $signedFiles = @(Get-ChildItem -Path 'release-signed' -Recurse -File)
+          }
+
+          if ($signedFiles.Count -gt 0) {
+            $zips = @($signedFiles | Where-Object { $_.Extension -ieq '.zip' })
+            if ($zips.Count -gt 0) {
+              New-Item -ItemType Directory -Path 'release-signed-unpacked' -Force | Out-Null
+              foreach ($zip in $zips) {
+                Expand-Archive -LiteralPath $zip.FullName -DestinationPath 'release-signed-unpacked' -Force
+              }
+            }
+            $exes = @()
+            $exes += @(Get-ChildItem -Path 'release-signed' -Recurse -File -Filter '*.exe')
+            if (Test-Path 'release-signed-unpacked') {
+              $exes += @(Get-ChildItem -Path 'release-signed-unpacked' -Recurse -File -Filter '*.exe')
+            }
+            foreach ($exe in $exes) {
+              Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path 'release-final' $exe.Name) -Force
+            }
+          } else {
+            Copy-Item -Path 'release-unsigned/*.exe' -Destination 'release-final' -Force
+          }
+
+          $finalSetup = Join-Path 'release-final' $setupName
+          $finalPortable = Join-Path 'release-final' $portableName
+          if (-not (Test-Path $finalSetup)) {
+            throw "Final setup executable missing: $finalSetup"
+          }
+          if (-not (Test-Path $finalPortable)) {
+            throw "Final portable executable missing: $finalPortable"
+          }
+
+          $checksumLines = Get-ChildItem -Path 'release-final' -File -Filter '*.exe' | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          }
+          $sumsPath = Join-Path (Resolve-Path 'release-final').Path 'SHA256SUMS.txt'
+          [System.IO.File]::WriteAllLines($sumsPath, [string[]]$checksumLines, [System.Text.UTF8Encoding]::new($false))
+          Get-Content -LiteralPath $sumsPath
+
+      - name: Upload final release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qingxia-windows-${{ steps.meta.outputs.version }}
+          path: release-final/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 轻匣 ${{ steps.meta.outputs.version }}
+          files: release-final/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

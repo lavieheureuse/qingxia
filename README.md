@@ -6,6 +6,8 @@
 
 在 [Releases](https://github.com/lavieheureuse/qingxia/releases) 下载轻匣安装版或免安装版。源码位于 `toolbox/`。
 
+官方安装包由 GitHub Actions 自动构建并附带 `SHA256SUMS.txt` 校验文件。在开源代码签名尚未正式启用前，Windows SmartScreen 可能弹出“Windows 已保护你的电脑”提示，确认来源为官方 Releases 并核对校验值后点击“更多信息”→“仍要运行”即可。
+
 ## 使用说明
 
 1. 下载并运行安装版，或直接运行免安装版。
@@ -36,3 +38,24 @@
 需要 Node.js。进入 `toolbox/` 后运行 `npm install`，再运行 `npm start`。
 
 插件目录应保留 `plugin.json` 指定的入口、预加载脚本和资源。构建输出、依赖目录及本机测试数据不属于源码发布内容。
+
+## 代码签名与隐私政策（Code Signing & Privacy Policy）
+
+### 代码签名政策（Code Signing Policy）
+
+Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- **提交与代码审核（Committers and Reviewers）**：[lavieheureuse](https://github.com/lavieheureuse)
+- **发布与签名审批（Approvers）**：[lavieheureuse](https://github.com/lavieheureuse)
+
+本项目仅对通过公开仓库 `lavieheureuse/qingxia` 在 GitHub Actions 官方托管环境中构建的产物提交代码签名。
+
+### 隐私政策（Privacy Policy）
+
+- 轻匣主程序不收集、统计或上传用户的个人数据、使用行为或插件数据，也不包含任何广告或遥测组件。
+- 仅在用户主动触发“GitHub 导入”“检查更新”或内置下载更新时，才会向 GitHub 官方接口发起只读网络请求；各独立插件的网络与本地文件访问行为受其自身功能与用户配置控制。
+- 插件配置与用户数据均保存在用户本机目录（`plugin-data/`），不会回传给开发者。
+
+### 开源协议（License）
+
+本项目采用 [MIT License](LICENSE) 开源。
