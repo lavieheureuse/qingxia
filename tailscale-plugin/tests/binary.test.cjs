@@ -11,6 +11,9 @@ const {
   verifyFileSha256,
   verifyPeArch,
   inspectBinaryDir,
+  findEmbeddedCabs,
+  extractFromEmbeddedCab,
+  friendlyMsiError,
   downloadAndInstall,
 } = require('../core/binary.cjs');
 
@@ -119,6 +122,46 @@ test('downloadAndInstall fetches manifest, verifies MSI SHA-256, extracts PE fil
     assert.equal(verifyPeArch(path.join(binDir, 'tailscaled.exe'), 'amd64'), true);
     assert.equal(fs.existsSync(path.join(binDir, 'wintun.dll')), true);
     assert.equal(JSON.parse(fs.readFileSync(path.join(binDir, 'manifest.json'), 'utf8')).msiSha256, msiSha);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('findEmbeddedCabs and extractFromEmbeddedCab map WiX file IDs to Tailscale binaries without msiexec', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-cab-'));
+  try {
+    const cabHeader = Buffer.alloc(128, 0);
+    cabHeader.write('MSCF', 0, 'ascii');
+    cabHeader.writeUInt32LE(128, 8); // cbCabinet
+    cabHeader[24] = 3; // versionMinor
+    cabHeader[25] = 1; // versionMajor
+    cabHeader.writeUInt16LE(3, 28); // cFiles
+    const fakeMsi = Buffer.concat([Buffer.from('MSI_PREFIX_DATA'), cabHeader, Buffer.from('MSI_TAIL')]);
+
+    const cabs = findEmbeddedCabs(fakeMsi);
+    assert.equal(cabs.length, 1);
+    assert.equal(cabs[0].size, 128);
+
+    const msiPath = path.join(tmpDir, 'tailscale.msi');
+    const extractDir = path.join(tmpDir, 'out');
+    fs.writeFileSync(msiPath, fakeMsi);
+    fs.mkdirSync(extractDir, { recursive: true });
+
+    await extractFromEmbeddedCab(msiPath, extractDir, {
+      expandRunner: async (_cabPath, partOut) => {
+        fs.writeFileSync(path.join(partOut, 'Service'), 'daemon');
+        fs.writeFileSync(path.join(partOut, 'ClientCmd'), 'cli');
+        fs.writeFileSync(path.join(partOut, 'WinTunApiLib'), 'dll');
+      },
+    });
+
+    assert.equal(fs.readFileSync(path.join(extractDir, 'tailscaled.exe'), 'utf8'), 'daemon');
+    assert.equal(fs.readFileSync(path.join(extractDir, 'tailscale.exe'), 'utf8'), 'cli');
+    assert.equal(fs.readFileSync(path.join(extractDir, 'wintun.dll'), 'utf8'), 'dll');
+
+    assert.match(friendlyMsiError(1618, ''), /另一项 Windows 安装任务/);
+    assert.match(friendlyMsiError(1625, ''), /系统策略/);
+    assert.match(friendlyMsiError(1603, ''), /1603/);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

@@ -1,7 +1,8 @@
 'use strict';
 
-// Tailscale Windows 官方内核管理：查询最新版本、下载 MSI、SHA-256 校验、msiexec /a 无服务解包、PE/版本校验与本地目录检测。
+// Tailscale Windows 官方内核管理：查询最新版本、下载 MSI、SHA-256 校验、优先直提内嵌 CAB（expand.exe）/ 兜底 msiexec /a 解包、PE/版本校验与本地目录检测。
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
@@ -13,6 +14,12 @@ const STABLE_BASE_URL = 'https://pkgs.tailscale.com/stable/';
 const ARCH_MAP = { x64: 'amd64', arm64: 'arm64', ia32: 'x86' };
 const PE_MACHINE_MAP = { amd64: 0x8664, arm64: 0xaa64, x86: 0x14c };
 const REQUIRED_FILES = ['tailscaled.exe', 'tailscale.exe', 'wintun.dll'];
+const WIX_FILE_ID_MAP = {
+  service: 'tailscaled.exe',
+  clientcmd: 'tailscale.exe',
+  wintunapilib: 'wintun.dll',
+};
+const CAB_SIGNATURE = Buffer.from([0x4d, 0x53, 0x43, 0x46, 0x00, 0x00, 0x00, 0x00]);
 const USER_AGENT = 'qingxia-tailscale-plugin/1.0.0';
 
 function createBinaryError(code, message, options) {
@@ -236,22 +243,140 @@ async function streamDownload(url, destPath, { fetchImpl, timeoutMs = 180000, on
   }
 }
 
-function defaultMsiexecRunner(msiPath, extractDir) {
-  const msiexec = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'msiexec.exe');
+function findEmbeddedCabs(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 36) return [];
+  const cabs = [];
+  let pos = 0;
+  while ((pos = buf.indexOf(CAB_SIGNATURE, pos)) !== -1) {
+    if (pos + 36 <= buf.length) {
+      const cbCabinet = buf.readUInt32LE(pos + 8);
+      const versionMinor = buf[pos + 24];
+      const versionMajor = buf[pos + 25];
+      const cFiles = buf.readUInt16LE(pos + 28);
+      if (versionMajor === 1 && versionMinor === 3 && cbCabinet > 64 && pos + cbCabinet <= buf.length) {
+        cabs.push({ pos, size: cbCabinet, cFiles });
+        pos += cbCabinet;
+        continue;
+      }
+    }
+    pos += 4;
+  }
+  return cabs;
+}
+
+function defaultExpandRunner(cabPath, outDir) {
+  const expandExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'expand.exe');
   return new Promise((resolve, reject) => {
     execFile(
-      msiexec,
-      ['/a', msiPath, '/qn', `TARGETDIR=${extractDir}`],
-      { windowsHide: true, timeout: 120000 },
-      (error, _stdout, stderr) => {
+      expandExe,
+      [cabPath, '-F:*', outDir],
+      { windowsHide: true, timeout: 90000, encoding: 'utf8' },
+      (error, stdout, stderr) => {
         if (error) {
-          reject(createBinaryError('EXTRACT_FAILED', `MSI 解包失败：${String(stderr || error.message).trim().slice(0, 200)}`));
+          reject(new Error(String(stderr || stdout || error.message).trim().slice(0, 200) || `expand 退出码 ${error.code}`));
         } else {
           resolve();
         }
       },
     );
   });
+}
+
+async function extractFromEmbeddedCab(msiPath, extractDir, options = {}) {
+  const expandRunner = typeof options.expandRunner === 'function' ? options.expandRunner : defaultExpandRunner;
+  const msiBuf = fs.readFileSync(msiPath);
+  const cabs = findEmbeddedCabs(msiBuf);
+  if (!cabs.length) {
+    throw createBinaryError('CAB_NOT_FOUND', 'MSI 安装包内未找到内嵌 CAB 数据流');
+  }
+  const cabWork = fs.mkdtempSync(path.join(extractDir, 'cab-'));
+  try {
+    for (let i = 0; i < cabs.length; i += 1) {
+      const cab = cabs[i];
+      const cabPath = path.join(cabWork, `part${i}.cab`);
+      const partOut = path.join(cabWork, `out${i}`);
+      fs.mkdirSync(partOut, { recursive: true });
+      fs.writeFileSync(cabPath, msiBuf.subarray(cab.pos, cab.pos + cab.size));
+      await expandRunner(cabPath, partOut);
+      for (const entry of fs.readdirSync(partOut, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const lower = entry.name.toLowerCase();
+        const canonical = REQUIRED_FILES.find((f) => f.toLowerCase() === lower) || WIX_FILE_ID_MAP[lower];
+        if (!canonical) continue;
+        const dest = path.join(extractDir, canonical);
+        if (!fs.existsSync(dest)) {
+          fs.copyFileSync(path.join(partOut, entry.name), dest);
+        }
+      }
+    }
+    const missing = REQUIRED_FILES.filter((f) => !isFile(path.join(extractDir, f)));
+    if (missing.length) {
+      throw createBinaryError('EXTRACT_MISSING', `CAB 解包后仍缺少文件：${missing.join('、')}`);
+    }
+  } finally {
+    try { fs.rmSync(cabWork, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+  }
+}
+
+function friendlyMsiError(exitCode, detail) {
+  const code = Number(exitCode);
+  if (code === 1618) return '系统正在执行另一项 Windows 安装任务，请稍后重试';
+  if (code === 1625) return '系统策略禁止运行 Windows Installer（错误 1625）';
+  if (code === 1603) return 'Windows Installer 解包受阻（错误 1603，可能受路径或权限限制）';
+  if (code === 1619) return '无法打开已下载的 MSI 安装包（错误 1619）';
+  const cleaned = String(detail || '')
+    .replace(/Command failed:\s*[^\r\n]*msiexec\.exe[^\r\n]*/gi, '')
+    .trim();
+  return cleaned ? cleaned.slice(0, 180) : (Number.isInteger(code) ? `退出码 ${code}` : '未知错误');
+}
+
+function extractViaMsiexec(msiPath, extractDir) {
+  const msiexec = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'msiexec.exe');
+  const shortTemp = fs.mkdtempSync(path.join(os.tmpdir(), `ts-msi-${crypto.randomBytes(4).toString('hex')}-`));
+  const tempMsi = path.join(shortTemp, 'pkg.msi');
+  const tempTarget = path.join(shortTemp, 'out');
+  fs.mkdirSync(tempTarget, { recursive: true });
+  fs.copyFileSync(msiPath, tempMsi);
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      msiexec,
+      ['/a', tempMsi, '/qn', `TARGETDIR=${tempTarget}`],
+      { windowsHide: true, timeout: 120000 },
+      (error, _stdout, stderr) => {
+        try {
+          if (error) {
+            return reject(createBinaryError('EXTRACT_FAILED', friendlyMsiError(error.code, stderr || error.message)));
+          }
+          const found = findFilesRecursive(tempTarget, REQUIRED_FILES);
+          for (const f of REQUIRED_FILES) {
+            const src = found.get(f.toLowerCase());
+            if (src) fs.copyFileSync(src, path.join(extractDir, f));
+          }
+          resolve();
+        } finally {
+          try { fs.rmSync(shortTemp, { recursive: true, force: true }); } catch (_) { /* ignore */ }
+        }
+      },
+    );
+  });
+}
+
+async function defaultMsiexecRunner(msiPath, extractDir) {
+  try {
+    await extractFromEmbeddedCab(msiPath, extractDir);
+    return;
+  } catch (cabErr) {
+    try {
+      await extractViaMsiexec(msiPath, extractDir);
+      return;
+    } catch (msiErr) {
+      throw createBinaryError(
+        'EXTRACT_FAILED',
+        `解包官方安装包失败（CAB 解包：${cabErr.message}；msiexec：${msiErr.message}）。你也可以手动下载官网安装包并解压后，点击“手动指定本地目录”导入。`,
+      );
+    }
+  }
 }
 
 function replaceFileSync(src, dest) {
@@ -358,6 +483,9 @@ module.exports = {
   detectBinaryVersion,
   inspectBinaryDir,
   findFilesRecursive,
+  findEmbeddedCabs,
+  extractFromEmbeddedCab,
+  friendlyMsiError,
   fetchLatestRelease,
   downloadAndInstall,
 };
