@@ -251,6 +251,11 @@
     // 打印机
     $('printerSelect').addEventListener('change', e => { s.printerName = e.target.value; save(); });
     $('btnRefreshPrinters').addEventListener('click', loadPrinters);
+    if ($('btnSystemPrinters')) {
+      $('btnSystemPrinters').addEventListener('click', () => {
+        if (API && API.openSystemPrinters) API.openSystemPrinters();
+      });
+    }
     // 份数
     $('copies').addEventListener('input', e => { s.copies = Math.max(1, +e.target.value || 1); save(); });
     $('copyMinus').addEventListener('click', () => { s.copies = Math.max(1, s.copies - 1); $('copies').value = s.copies; save(); });
@@ -324,16 +329,84 @@
     b.textContent = text;
     b.className = 'engine-badge' + (cls ? ' ' + cls : '');
   }
+  let refreshingPrinters = false;
+  function renderDirectPrinters(items) {
+    const box = $('directPrintersBox');
+    const listEl = $('directPrintersList');
+    const hint = $('printerHint');
+    if (!box || !listEl) return;
+    const pending = (items || []).filter(p => p && !p.alreadyInstalled);
+    if (!pending.length) {
+      box.hidden = true;
+      listEl.innerHTML = '';
+      if (hint) hint.textContent = 'Wi-Fi Direct 直连需先添加到系统打印机；点刷新会自动探测当前直连打印机。';
+      return;
+    }
+    listEl.innerHTML = '';
+    pending.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = 'direct-printer-item';
+      row.innerHTML =
+        '<div class="direct-printer-info">' +
+          '<div class="direct-printer-name" title="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + '</div>' +
+          '<div class="direct-printer-meta">' + escapeHtml(p.ip) + ' · ' + (p.protocol === 'ipp' ? 'IPP' : 'TCP') + '</div>' +
+        '</div>' +
+        '<button class="btn primary btn-xs">一键添加</button>';
+      const btn = row.querySelector('button');
+      btn.addEventListener('click', async () => {
+        if (!API || !API.addDirectPrinter) return;
+        btn.disabled = true;
+        btn.textContent = '添加中…';
+        try {
+          const res = await API.addDirectPrinter(p);
+          if (res && res.ok) {
+            state.settings.printerName = res.name || p.name;
+            save();
+            await loadPrinters();
+            toast('已添加并选中打印机：' + (res.name || p.name));
+          } else {
+            btn.disabled = false;
+            btn.textContent = '一键添加';
+            toast((res && res.message) || '添加失败，请点击「系统打印机」手动添加', true);
+          }
+        } catch (e) {
+          btn.disabled = false;
+          btn.textContent = '一键添加';
+          toast('添加失败，请点击「系统打印机」手动添加', true);
+        }
+      });
+      listEl.appendChild(row);
+    });
+    box.hidden = false;
+    if (hint) hint.textContent = '检测到未添加到系统的直连打印机，点击「一键添加」即可加入打印列表。';
+  }
   async function loadPrinters() {
-    if (!API || !API.getPrinters) return;
+    if (!API || !API.getPrinters || refreshingPrinters) return;
+    refreshingPrinters = true;
     const sel = $('printerSelect');
+    const refreshBtn = $('btnRefreshPrinters');
+    const hint = $('printerHint');
+    if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = '刷新中…'; }
+    if (hint) hint.textContent = '正在刷新系统列表并探测直连打印机…';
     try {
-      const list = await API.getPrinters();
-      if (!list.length) { sel.innerHTML = '<option value="">系统默认打印机</option>'; return; }
-      sel.innerHTML = '<option value="">系统默认打印机</option>' +
-        list.map(p => '<option value="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + (p.isDefault ? '（默认）' : '') + '</option>').join('');
-      sel.value = state.settings.printerName || '';
-    } catch (e) { /* 忽略 */ }
+      const [list, directList] = await Promise.all([
+        API.getPrinters(),
+        API.discoverDirectPrinters ? API.discoverDirectPrinters().catch(() => []) : Promise.resolve([])
+      ]);
+      if (!list.length) {
+        sel.innerHTML = '<option value="">系统默认打印机</option>';
+      } else {
+        sel.innerHTML = '<option value="">系统默认打印机</option>' +
+          list.map(p => '<option value="' + escapeHtml(p.name) + '">' + escapeHtml(p.name) + (p.isDefault ? '（默认）' : '') + '</option>').join('');
+        sel.value = state.settings.printerName || '';
+      }
+      renderDirectPrinters(directList);
+    } catch (e) {
+      if (hint) hint.textContent = '刷新打印机列表失败，请重试。';
+    } finally {
+      refreshingPrinters = false;
+      if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = '刷新打印机列表'; }
+    }
   }
 
   /* ---------------- PDF 页面预览 ---------------- */
@@ -510,17 +583,44 @@
   }
 
   /* ---------------- 浏览器兜底打印（图片） ---------------- */
+  function rasterizeImageToPng(filePath) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h) { reject(new Error('图片尺寸无效')); return; }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/png'));
+        } catch (e) { reject(e); }
+      };
+      img.onerror = () => reject(new Error('无法解码图片'));
+      img.src = API ? API.fileUrl(filePath) : ('file:///' + filePath.replace(/\\/g, '/'));
+    });
+  }
+
   function browserPrintImage(filePath) {
     return new Promise((resolve) => {
       const opt = collectSettings();
       const { w, h } = paperDims();
       const m = opt.margins;
+      const availW = Math.max(1, w - (Number(m.left) || 0) - (Number(m.right) || 0));
+      const availH = Math.max(1, h - (Number(m.top) || 0) - (Number(m.bottom) || 0));
+      const scalePct = Math.max(10, Math.min(300, Number(opt.scaleFactor) || 100));
+      const scaleCss = scalePct === 100 ? '' : 'transform:scale(' + (scalePct / 100) + ');';
       const url = API ? API.fileUrl(filePath) : ('file:///' + filePath.replace(/\\/g, '/'));
       const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
         '@page{size:' + w + 'mm ' + h + 'mm;margin:' + m.top + 'mm ' + m.right + 'mm ' + m.bottom + 'mm ' + m.left + 'mm;}' +
-        'html,body{margin:0;padding:0;}' +
-        '.p{width:100%;height:100%;display:flex;align-items:center;justify-content:center;page-break-after:always;}' +
-        'img{max-width:100%;max-height:100%;object-fit:contain;}' +
+        'html,body{width:' + availW + 'mm;height:' + availH + 'mm;margin:0;padding:0;overflow:hidden;}' +
+        '.p{width:' + availW + 'mm;height:' + availH + 'mm;display:flex;align-items:center;justify-content:center;overflow:hidden;}' +
+        'img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;' + scaleCss + '}' +
         '</style></head><body><div class="p"><img src="' + url + '"></div></body></html>';
       const blob = new Blob([html], { type: 'text/html' });
       const blobUrl = URL.createObjectURL(blob);
@@ -535,8 +635,17 @@
       iframe.onload = () => {
         try {
           const cw = iframe.contentWindow;
-          cw.onafterprint = () => finish(true);
-          setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { finish(false); } }, 300);
+          const im = cw.document.querySelector('img');
+          const trigger = () => {
+            cw.onafterprint = () => finish(true);
+            setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { finish(false); } }, 150);
+          };
+          if (im && !im.complete) {
+            im.onload = trigger;
+            im.onerror = () => finish(false);
+          } else {
+            trigger();
+          }
           // 用户取消对话框长时间无 afterprint 不做强制失败，给 5 分钟兜底
           setTimeout(() => finish(true), 5 * 60 * 1000);
         } catch (e) { finish(false); }
@@ -629,6 +738,30 @@
       });
     } catch (e) {
       summary = { okCount: 0, failCount: paths.length, results: paths.map(p => ({ file: p, ok: false, reason: String(e) })) };
+    }
+
+    // 对 GDI+ 不直接支持的图片（如 WebP 改后缀、特殊编码 JPEG），先用 Chromium 解码成 PNG 再静默打印。
+    const rasterTargets = (summary.results || []).filter(r => !r.ok && r.reason && r.reason.indexOf('need-canvas-raster') === 0);
+    for (const r of rasterTargets) {
+      if (!API || !API.printImagePng) break;
+      setRow(r.file, { status: 'printing', reason: '' });
+      try {
+        const pngDataUrl = await rasterizeImageToPng(r.file);
+        const res = await API.printImagePng(pngDataUrl, opt, r.name);
+        if (res && res.ok) {
+          setRow(r.file, { status: 'ok', reason: '' });
+          r.ok = true;
+          r.engine = res.engine || 'ps-image-raster';
+          r.reason = '';
+        } else {
+          const reason = (res && res.reason) || 'ps-image-raster-fail';
+          const isBadPrinter = reason.indexOf('invalid-printer') >= 0;
+          r.reason = isBadPrinter ? reason : ('use-browser-print:' + reason);
+          if (isBadPrinter) setRow(r.file, { status: 'fail', reason });
+        }
+      } catch (e) {
+        r.reason = 'use-browser-print:' + (e && e.message ? e.message : String(e));
+      }
     }
 
     // 默认阅读器/静默打印失败时，走系统打印对话框。

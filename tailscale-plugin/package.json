@@ -1,0 +1,16 @@
+{
+  "name": "tailscale-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tailscale 异地组网 · 轻匣插件（Windows Wintun 虚拟网卡模式）",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check.cjs",
+    "icon": "node scripts/make-icon.cjs"
+  },
+  "dependencies": {}
+}

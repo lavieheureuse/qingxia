@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { uIOhook } = require('uiohook-napi');
+const { pluginDataFolder, resolvePluginDataSubdir, isLegacyPlugin, migrateSinglePluginData, migrateInstalledPluginsDataOnStartup, collectRemovablePluginDataDirs, copyPluginDataRoot, isManagedPluginDataDir } = require('./plugin-storage.cjs');
 
 const dataRoot = path.join(app.getPath('appData'), 'qingxia');
 const oldDataRoot = path.join(app.getPath('appData'), '个人工具箱');
@@ -583,7 +584,7 @@ function readPlugin(dir) {
   return { dir: root, main, preload, icon, name, description: feature.description || '', code: feature.code || '', pluginId: id, identity };
 }
 function samePlugin(a, b) { return a.pluginId && b.pluginId ? a.pluginId === b.pluginId : a.identity === b.identity; }
-function displayPlugin(p) { return { ...p, icon: p.icon ? require('node:url').pathToFileURL(p.icon).href : '' }; }
+function displayPlugin(p) { return { ...p, dataSubdir: resolvePluginDataSubdir(p), icon: p.icon ? require('node:url').pathToFileURL(p.icon).href : '' }; }
 function friendlyError(error) {
   if (error.code === 'ENOENT') return '找不到插件需要的文件。请确认插件已经完整解压，并重新选择包含 plugin.json 的文件夹。';
   if (error.code === 'EACCES' || error.code === 'EPERM') return '无法访问该文件或文件夹，请检查访问权限或文件是否被占用。';
@@ -696,50 +697,32 @@ function describeFrpcData(dir) {
   } catch (_) { return '无法读取连接设置'; }
 }
 function preparePluginData(plugin) {
-  const name = legacyPluginData.get(`${plugin.code}\0${plugin.name}`);
-  if (!name) return '';
-  const root = path.join(data, 'plugin-data');
-  const oldDir = path.join(data, name), newDir = path.join(root, name);
+  const targetRoot = pluginDataFolder(pluginFolder());
   try {
-    if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('插件数据目录不能是链接');
-    if (fs.existsSync(oldDir)) {
-      if (fs.lstatSync(oldDir).isSymbolicLink()) throw new Error('原插件数据目录不能是链接');
-      if (fs.existsSync(newDir)) {
-        if (fs.lstatSync(newDir).isSymbolicLink()) throw new Error('新插件数据目录不能是链接');
-        let choice = 0;
-        if (name !== 'frpc-utools' || !emptyFrpcData(oldDir) || !configuredFrpcData(newDir)) {
-          const details = name === 'frpc-utools'
-            ? `当前数据：${describeFrpcData(newDir)}\n旧数据：${describeFrpcData(oldDir)}\n\n`
-            : '';
-          if (mainWindow) pluginDialogs.add(mainWindow);
-          try {
-            choice = dialog.showMessageBoxSync({
-              type: 'question', title: '选择插件数据', message: `发现两份${plugin.name}数据`,
-              detail: `${details}请选择要继续使用的数据，另一份会保留为备份。两份数据不会合并。\n\n当前目录：${newDir}\n旧目录：${oldDir}`,
-              buttons: ['使用当前数据', '使用旧数据', '取消'], defaultId: 0, cancelId: 2, noLink: true,
-            });
-          } finally { if (mainWindow) pluginDialogs.delete(mainWindow); }
-        }
-        if (choice === 2) return null;
-        const backup = path.join(data, `${name}-backup-${require('node:crypto').randomUUID()}`);
-        if (fs.existsSync(backup)) throw new Error('备份目录已存在');
-        if (choice === 0) fs.renameSync(oldDir, backup);
-        else {
-          fs.renameSync(newDir, backup);
-          try { fs.renameSync(oldDir, newDir); }
-          catch (error) {
-            try { fs.renameSync(backup, newDir); }
-            catch (_) { throw new Error(`恢复数据失败，请检查 ${backup} 与 ${oldDir}`); }
-            throw error;
-          }
-        }
-        return root;
-      }
-      fs.mkdirSync(root, { recursive: true });
-      fs.renameSync(oldDir, newDir);
-    }
+    const result = migrateSinglePluginData({
+      plugin,
+      targetRoot,
+      legacyGlobalRoot: path.join(data, 'plugin-data'),
+      legacyUserDataRoot: data,
+      resolveConflict: ({ subdir, oldDir, newDir }) => {
+        if (subdir === 'frpc-utools' && emptyFrpcData(oldDir) && configuredFrpcData(newDir)) return 'use-current';
+        const details = subdir === 'frpc-utools'
+          ? `当前数据：${describeFrpcData(newDir)}\n旧数据：${describeFrpcData(oldDir)}\n\n`
+          : '';
+        if (mainWindow) pluginDialogs.add(mainWindow);
+        try {
+          const choice = dialog.showMessageBoxSync({
+            type: 'question', title: '选择插件数据', message: `发现两份${plugin.name}数据`,
+            detail: `${details}请选择要继续使用的数据，另一份会保留为备份。两份数据不会合并。\n\n当前目录：${newDir}\n旧目录：${oldDir}`,
+            buttons: ['使用当前数据', '使用旧数据', '取消'], defaultId: 0, cancelId: 2, noLink: true,
+          });
+          return choice === 0 ? 'use-current' : choice === 1 ? 'use-old' : 'cancel';
+        } finally { if (mainWindow) pluginDialogs.delete(mainWindow); }
+      },
+    });
+    if (result === null) return null;
+    return isLegacyPlugin(plugin) ? targetRoot : '';
   } catch (error) { throw new Error(`无法迁移${plugin.name}的数据：${error.message}。原有数据未被覆盖。`); }
-  return root;
 }
 const pluginMenus = new Map();
 const pluginDialogs = new Set();
@@ -790,7 +773,10 @@ async function changePluginFolder(target) {
   if (!fs.statSync(destination).isDirectory()) throw new Error('插件目录不可用，请选择其他位置。');
   const mapping = new Map(), created = [];
   const previous = settings;
+  let dataMigration = { migrated: false, oldData: '', created: [] };
   try {
+    dataMigration = copyPluginDataRoot({ oldFolder, newFolder: destination });
+    created.push(...dataMigration.created);
     for (const { original, plugin } of sources) {
       const targetDir = path.join(destination, require('node:crypto').randomUUID());
       fs.mkdirSync(targetDir);
@@ -804,13 +790,16 @@ async function changePluginFolder(target) {
     save();
   } catch (error) {
     settings = previous;
-    for (const dir of created) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件迁移失败:', cleanupError); } }
+    for (const dir of [...created].reverse()) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (cleanupError) { console.error('清理未完成的插件迁移失败:', cleanupError); } }
     throw error;
   }
   let cleanupFailed = false;
   for (const { plugin } of sources) {
     if (path.dirname(plugin.dir).toLowerCase() !== path.resolve(oldFolder).toLowerCase() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(plugin.dir))) { cleanupFailed = true; continue; }
     try { await shell.trashItem(plugin.dir); } catch (error) { console.error('清理旧插件目录失败:', error); cleanupFailed = true; }
+  }
+  if (dataMigration.migrated && dataMigration.oldData && fs.existsSync(dataMigration.oldData)) {
+    try { await shell.trashItem(dataMigration.oldData); } catch (error) { console.error('清理旧插件数据目录失败:', error); cleanupFailed = true; }
   }
   if (path.resolve(oldFolder).toLowerCase() === path.resolve(data, 'plugins').toLowerCase() || path.basename(path.resolve(oldFolder)).toLowerCase() === 'qingxia-plugin') {
     try { fs.rmdirSync(oldFolder); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) cleanupFailed = true; }
@@ -885,6 +874,15 @@ app.whenReady().then(async () => {
     const timer = setTimeout(() => { checkAppUpdate({ silent: true }).catch(() => {}); }, 3000);
     if (typeof timer.unref === 'function') timer.unref();
   }
+  try {
+    const startupMigration = migrateInstalledPluginsDataOnStartup({
+      installedPlugins: plugins(),
+      targetRoot: pluginDataFolder(pluginFolder()),
+      legacyGlobalRoot: path.join(data, 'plugin-data'),
+      legacyUserDataRoot: data,
+    });
+    for (const err of startupMigration.errors) console.error('启动迁移插件数据失败:', err.subdir, err.message);
+  } catch (error) { console.error('启动迁移插件数据异常:', error); }
   for (const dir of settings.pluginStartup) {
     if (!settings.plugins.includes(dir)) continue;
     try { openPlugin(dir, true); } catch (error) { console.error('后台插件启动失败:', error); const notice = () => mainWindow.webContents.send('notice', `后台插件启动失败：${friendlyError(error)}`); if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', notice); else notice(); }
@@ -952,6 +950,12 @@ async function installPlugins(sources, replace) {
   try { realBase = fs.realpathSync(base); } catch (error) { console.error('检查插件目录失败:', error); cleanupFailed = mapping.size > 0; }
   for (const old of mapping.keys()) {
     try {
+      const oldFrpc = path.join(old, 'bin', 'frpc.exe');
+      const targetFrpc = path.join(pluginDataFolder(base), 'frpc-utools', 'bin', 'frpc.exe');
+      if (fs.existsSync(oldFrpc) && !fs.existsSync(targetFrpc) && !fs.lstatSync(oldFrpc).isSymbolicLink()) {
+        fs.mkdirSync(path.dirname(targetFrpc), { recursive: true });
+        fs.copyFileSync(oldFrpc, targetFrpc);
+      }
       if (!fs.existsSync(old)) continue;
       if (!isManagedPluginDir(old, realBase)) { cleanupFailed = true; continue; }
       await shell.trashItem(old);
@@ -1048,20 +1052,42 @@ async function toolboxAction(event, action, value) {
     return installPlugins(sources, !Array.isArray(value) && value?.replace === true);
   }
   if (action === 'remove') {
-    const win = windows.get(value);
+    const targetDir = typeof value === 'string' ? value : value?.dir;
+    const removeData = Boolean(typeof value === 'object' && value?.removeData);
+    let removedPlugin = null;
+    try { removedPlugin = readPlugin(targetDir); } catch (_) {}
+    const win = windows.get(targetDir);
     if (win && !win.isDestroyed()) {
       const contents = [...pluginViews.entries()].find(([, owner]) => owner === win);
       if (contents) { await cleanupPlugin(require('electron').webContents.fromId(contents[0])); pluginExitHandlers.delete(contents[0]); }
     }
-    settings.plugins = settings.plugins.filter(x => x !== value); settings.panel = settings.panel.filter(x => x !== value); settings.independent = settings.independent.filter(x => x !== value); settings.background = settings.background.filter(x => x !== value); settings.pluginStartup = settings.pluginStartup.filter(x => x !== value); save();
+    settings.plugins = settings.plugins.filter(x => x !== targetDir); settings.panel = settings.panel.filter(x => x !== targetDir); settings.independent = settings.independent.filter(x => x !== targetDir); settings.background = settings.background.filter(x => x !== targetDir); settings.pluginStartup = settings.pluginStartup.filter(x => x !== targetDir); save();
     if (win && !win.isDestroyed()) await closePluginWindow(win);
     let cleanupFailed = false;
     try {
       const base = pluginFolder();
-      if (fs.existsSync(base) && isManagedPluginDir(value, fs.realpathSync(base))) await shell.trashItem(value);
+      if (fs.existsSync(base) && isManagedPluginDir(targetDir, fs.realpathSync(base))) await shell.trashItem(targetDir);
     } catch (error) { console.error('清理已移除插件副本失败:', error); cleanupFailed = true; }
+    if (removeData && removedPlugin) {
+      try {
+        const subdir = resolvePluginDataSubdir(removedPlugin);
+        const stillUsed = subdir && plugins().some(p => resolvePluginDataSubdir(p) === subdir);
+        if (subdir && !stillUsed) {
+          const targets = collectRemovablePluginDataDirs({
+            plugin: removedPlugin,
+            currentDataRoot: pluginDataFolder(pluginFolder()),
+            legacyGlobalRoot: path.join(data, 'plugin-data'),
+            legacyUserDataRoot: data,
+          });
+          for (const targetDataDir of targets) {
+            try { await shell.trashItem(targetDataDir); }
+            catch (error) { console.error('清理已移除插件数据失败:', targetDataDir, error); cleanupFailed = true; }
+          }
+        }
+      } catch (error) { console.error('清理已移除插件数据失败:', error); cleanupFailed = true; }
+    }
     refresh();
-    return { ...snapshot(), ...(cleanupFailed ? { warning: '工具已移除，但旧插件文件夹未能移入回收站。请关闭相关程序后检查插件目录。' } : {}) };
+    return { ...snapshot(), ...(cleanupFailed ? { warning: '工具已移除，但部分插件文件或数据未能移入回收站。请关闭相关程序后检查插件目录。' } : {}) };
   }
   if (action === 'clean-orphans') return cleanOrphanPluginDirs();
   if (action === 'panel') { const valid = new Set(plugins().map(p => p.dir)); settings.panel = value.filter(x => valid.has(x)); save(); refresh(); return snapshot(); }
@@ -1097,7 +1123,15 @@ async function toolboxAction(event, action, value) {
   }
   throw new Error('不支持的操作');
 }
-ipcMain.on('host-path', (e, name) => { e.returnValue = name === 'pluginData' ? path.join(data, 'plugin-data') : name === 'userData' && pluginDataRoots.has(e.sender.id) ? pluginDataRoots.get(e.sender.id) : ['userData', 'downloads', 'desktop', 'documents', 'temp'].includes(name) ? app.getPath(name) : ''; });
+ipcMain.on('host-path', (e, name) => {
+  if (name === 'pluginData') {
+    const root = pluginDataFolder(pluginFolder());
+    try { fs.mkdirSync(root, { recursive: true }); } catch (_) {}
+    e.returnValue = root;
+    return;
+  }
+  e.returnValue = name === 'userData' && pluginDataRoots.has(e.sender.id) ? pluginDataRoots.get(e.sender.id) : ['userData', 'downloads', 'desktop', 'documents', 'temp'].includes(name) ? app.getPath(name) : '';
+});
 ipcMain.handle('host-dialog', async (e, options) => { const owner = pluginViews.get(e.sender.id) || BrowserWindow.fromWebContents(e.sender); if (owner) pluginDialogs.add(owner); try { const result = await dialog.showOpenDialog(owner, options); return result.canceled ? undefined : result.filePaths; } finally { if (owner) pluginDialogs.delete(owner); } });
 ipcMain.handle('host-open', (e, p) => shell.openPath(p));
 ipcMain.handle('host-show', (e, p) => shell.showItemInFolder(p));

@@ -238,3 +238,16 @@ select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px; 
 .result-list { margin-top: 6px; max-height: 120px; overflow-y: auto; border-top: 1px dashed var(--border); padding-top: 6px; }
 .result-item { padding: 3px 0; font-size: 11px; color: var(--text-2); display: flex; gap: 6px; }
 .result-item .mark { flex-shrink: 0; }
+
+/* 直连打印机发现与快捷添加 */
+.printer-actions { display: flex; gap: 6px; margin-top: 6px; }
+.printer-actions .btn { flex: 1; justify-content: center; padding: 6px 8px; font-size: 12px; white-space: nowrap; }
+.direct-printers { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--primary-light); border: 1px solid #cfe0ff; }
+.direct-printers[hidden] { display: none; }
+.direct-printers-head { font-size: 11px; font-weight: 700; color: var(--primary-dark); margin-bottom: 6px; }
+.direct-printers-list { display: flex; flex-direction: column; gap: 6px; }
+.direct-printer-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; background: #fff; border: 1px solid #dbe7ff; }
+.direct-printer-info { flex: 1; min-width: 0; }
+.direct-printer-name { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.direct-printer-meta { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.btn.btn-xs { padding: 4px 9px; font-size: 11px; border-radius: 6px; flex-shrink: 0; }

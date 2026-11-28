@@ -19,17 +19,23 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const net = require('net');
+const http = require('http');
+const dgram = require('dgram');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 
 /* ----------------------------- electron 渲染层 ----------------------------- */
 // uTools preload 仅提供渲染层模块；nativeImage 可用于读取图片尺寸，拿不到就算了
 let electronNativeImage = null;
+let electronShell = null;
 try {
   const electron = require('electron');
   electronNativeImage = electron.nativeImage || null;
+  electronShell = electron.shell || null;
 } catch (e) {
   electronNativeImage = null;
+  electronShell = null;
 }
 
 /* ------------------------------- 常量定义 ------------------------------- */
@@ -148,9 +154,9 @@ function runPs(scriptOrArgs, opts) {
 function getPrintersWin() {
   const ps =
     "try { $utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; " +
-    "$ps = Get-CimInstance Win32_Printer | Select-Object Name, Default; " +
+    "$ps = Get-CimInstance Win32_Printer | Select-Object Name, Default, PortName; " +
     "if (-not $ps) { '[]'; exit } " +
-    "$out = @(); foreach ($p in $ps) { $out += [PSCustomObject]@{ name = $p.Name; isDefault = [bool]$p.Default } }; " +
+    "$out = @(); foreach ($p in $ps) { $out += [PSCustomObject]@{ name = $p.Name; isDefault = [bool]$p.Default; portName = [string]$p.PortName } }; " +
     "($out | ConvertTo-Json -Compress -Depth 3) } catch { '[]' }";
   return runPs(ps, { timeout: 20000 }).then((r) => {
     if (r.code !== 0 || !r.stdout.trim()) return [];
@@ -161,9 +167,625 @@ function getPrintersWin() {
       if (!Array.isArray(data)) data = [data];
       return data
         .filter(x => x && x.name)
-        .map(x => ({ name: String(x.name), isDefault: !!x.isDefault, displayName: String(x.name) }));
+        .map(x => ({
+          name: String(x.name),
+          isDefault: !!x.isDefault,
+          displayName: String(x.name),
+          portName: String(x.portName || '')
+        }));
     } catch (e) { return []; }
   });
+}
+
+function isValidIpv4(ip) {
+  if (typeof ip !== 'string' || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return false;
+  return ip.split('.').every(part => {
+    const n = Number(part);
+    return n >= 0 && n <= 255;
+  });
+}
+
+function extractIpv4List(text) {
+  const matches = String(text || '').match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+  return matches.filter(isValidIpv4);
+}
+
+function getInstalledPrinterHostIps(printers) {
+  const ips = new Set();
+  for (const p of (printers || [])) {
+    for (const ip of extractIpv4List(p.portName)) ips.add(ip);
+    for (const ip of extractIpv4List(p.name)) ips.add(ip);
+  }
+  const ps =
+    "try { $utf8 = New-Object System.Text.UTF8Encoding($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; " +
+    "$ports = Get-PrinterPort | Select-Object Name, PrinterHostAddress; " +
+    "if (-not $ports) { '[]'; exit } " +
+    "($ports | ConvertTo-Json -Compress -Depth 2) } catch { '[]' }";
+  return runPs(ps, { timeout: 10000 }).then((r) => {
+    try {
+      let data = JSON.parse((r.stdout || '').trim() || '[]');
+      if (!Array.isArray(data)) data = [data];
+      for (const item of data) {
+        if (!item) continue;
+        for (const ip of extractIpv4List(item.PrinterHostAddress)) ips.add(ip);
+        for (const ip of extractIpv4List(item.Name)) ips.add(ip);
+      }
+    } catch (e) {}
+    return ips;
+  }).catch(() => ips);
+}
+
+function collectGatewayCandidates() {
+  const ifaces = os.networkInterfaces();
+  const seen = new Set();
+  const candidates = [];
+  for (const entries of Object.values(ifaces)) {
+    for (const info of (entries || [])) {
+      if (!info || info.internal || info.family !== 'IPv4') continue;
+      if (!isValidIpv4(info.address)) continue;
+      if (info.address.startsWith('127.') || info.address.startsWith('169.254.')) continue;
+      const parts = info.address.split('.');
+      const gw = parts[0] + '.' + parts[1] + '.' + parts[2] + '.1';
+      if (gw !== info.address && !seen.has(gw)) {
+        seen.add(gw);
+        candidates.push(gw);
+      }
+    }
+  }
+  return candidates;
+}
+
+function probeTcpPort(ip, port, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection({ host: ip, port });
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch (e) {}
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
+function encodeIppAttr(tag, name, value) {
+  const nameBuf = Buffer.from(name || '', 'utf8');
+  const valBuf = Buffer.from(value || '', 'utf8');
+  const buf = Buffer.allocUnsafe(5 + nameBuf.length + valBuf.length);
+  buf[0] = tag;
+  buf.writeUInt16BE(nameBuf.length, 1);
+  nameBuf.copy(buf, 3);
+  buf.writeUInt16BE(valBuf.length, 3 + nameBuf.length);
+  valBuf.copy(buf, 5 + nameBuf.length);
+  return buf;
+}
+
+function buildIppGetAttributes(uri) {
+  const header = Buffer.from([0x01, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x01, 0x01]);
+  return Buffer.concat([
+    header,
+    encodeIppAttr(0x47, 'attributes-charset', 'utf-8'),
+    encodeIppAttr(0x48, 'attributes-natural-language', 'en'),
+    encodeIppAttr(0x45, 'printer-uri', uri),
+    encodeIppAttr(0x44, 'requested-attributes', 'printer-make-and-model'),
+    encodeIppAttr(0x44, '', 'printer-info'),
+    encodeIppAttr(0x44, '', 'printer-name'),
+    Buffer.from([0x03])
+  ]);
+}
+
+function parseIppAttributes(buf) {
+  const attrs = {};
+  if (!Buffer.isBuffer(buf) || buf.length < 9) return attrs;
+  let offset = 8;
+  let currentName = '';
+  while (offset < buf.length) {
+    const tag = buf[offset++];
+    if (tag === 0x03) break;
+    if (tag <= 0x0f) { currentName = ''; continue; }
+    if (offset + 2 > buf.length) break;
+    const nameLen = buf.readUInt16BE(offset);
+    offset += 2;
+    if (offset + nameLen > buf.length) break;
+    if (nameLen > 0) {
+      currentName = buf.toString('utf8', offset, offset + nameLen);
+      offset += nameLen;
+    }
+    if (offset + 2 > buf.length) break;
+    const valLen = buf.readUInt16BE(offset);
+    offset += 2;
+    if (offset + valLen > buf.length) break;
+    const valSlice = buf.subarray(offset, offset + valLen);
+    offset += valLen;
+    if (!currentName || attrs[currentName]) continue;
+    if (tag === 0x35 || tag === 0x36) {
+      if (valSlice.length >= 4) {
+        const langLen = valSlice.readUInt16BE(0);
+        if (2 + langLen + 2 <= valSlice.length) {
+          const textLen = valSlice.readUInt16BE(2 + langLen);
+          const textStart = 4 + langLen;
+          if (textStart + textLen <= valSlice.length) {
+            attrs[currentName] = valSlice.toString('utf8', textStart, textStart + textLen).trim();
+          }
+        }
+      }
+    } else if ([0x41, 0x42, 0x44, 0x45, 0x47, 0x48, 0x49].includes(tag)) {
+      const txt = valSlice.toString('utf8').trim();
+      if (txt) attrs[currentName] = txt;
+    }
+  }
+  return attrs;
+}
+
+function postIppRequest(ip, port, resourcePath, body, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+    const req = http.request({
+      host: ip,
+      port,
+      path: resourcePath,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/ipp',
+        'Content-Length': body.length
+      }
+    }, (res) => {
+      const chunks = [];
+      let total = 0;
+      res.on('data', (chunk) => {
+        total += chunk.length;
+        if (total > 256 * 1024) { res.destroy(); done(null); return; }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        if (res.statusCode !== 200) return done(null);
+        const raw = Buffer.concat(chunks);
+        if (raw.length < 8) return done(null);
+        done(parseIppAttributes(raw));
+      });
+      res.on('error', () => done(null));
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      done(null);
+    });
+    req.on('error', () => done(null));
+    req.end(body);
+  });
+}
+
+async function queryIppPrinter(ip, port = 631, preferredPath = '/ipp/print') {
+  const rawPaths = [preferredPath, '/ipp/print', '/'];
+  const paths = [];
+  for (const p of rawPaths) {
+    const clean = p && p.startsWith('/') ? p : '/' + (p || '');
+    if (!paths.includes(clean)) paths.push(clean);
+  }
+  for (const resourcePath of paths) {
+    const ippUri = `ipp://${ip}:${port}${resourcePath}`;
+    const attrs = await postIppRequest(ip, port, resourcePath, buildIppGetAttributes(ippUri));
+    if (!attrs) continue;
+    const model = attrs['printer-make-and-model'] || attrs['printer-info'] || attrs['printer-name'] || '';
+    return {
+      ok: true,
+      name: model ? String(model).trim() : '',
+      ippUrl: `http://${ip}:${port}${resourcePath}`
+    };
+  }
+  return { ok: false, name: '', ippUrl: '' };
+}
+
+function readDnsName(buf, startOffset) {
+  const labels = [];
+  let offset = startOffset;
+  let nextOffset = startOffset;
+  let jumped = false;
+  let jumps = 0;
+  while (offset < buf.length && jumps < 16) {
+    const len = buf[offset];
+    if (len === 0) {
+      if (!jumped) nextOffset = offset + 1;
+      break;
+    }
+    if ((len & 0xc0) === 0xc0) {
+      if (offset + 1 >= buf.length) return null;
+      const ptr = ((len & 0x3f) << 8) | buf[offset + 1];
+      if (!jumped) nextOffset = offset + 2;
+      offset = ptr;
+      jumped = true;
+      jumps++;
+      continue;
+    }
+    offset++;
+    if (offset + len > buf.length) return null;
+    labels.push(buf.toString('utf8', offset, offset + len));
+    offset += len;
+    if (!jumped) nextOffset = offset;
+  }
+  return { name: labels.join('.'), nextOffset };
+}
+
+function parseDnsTxt(buf, start, len) {
+  const out = {};
+  let offset = start;
+  const end = Math.min(buf.length, start + len);
+  while (offset < end) {
+    const itemLen = buf[offset++];
+    if (!itemLen || offset + itemLen > end) break;
+    const entry = buf.toString('utf8', offset, offset + itemLen);
+    offset += itemLen;
+    const eq = entry.indexOf('=');
+    if (eq > 0) out[entry.slice(0, eq).toLowerCase()] = entry.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+function discoverMdnsIpp(timeoutMs = 900) {
+  return new Promise((resolve) => {
+    const results = new Map();
+    let socket;
+    let timer;
+    const finish = () => {
+      clearTimeout(timer);
+      try { socket && socket.close(); } catch (e) {}
+      const list = [];
+      for (const svc of results.values()) {
+        if (!svc.ip) continue;
+        const rp = svc.txt.rp ? (svc.txt.rp.startsWith('/') ? svc.txt.rp : '/' + svc.txt.rp) : '/ipp/print';
+        const displayName = svc.txt.ty || svc.txt.product || svc.instanceName || '';
+        list.push({
+          ip: svc.ip,
+          port: svc.port || 631,
+          rp,
+          name: displayName.replace(/\._ipp\._tcp\.local$/i, '').trim()
+        });
+      }
+      resolve(list);
+    };
+    try {
+      socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    } catch (e) {
+      return resolve([]);
+    }
+    const hostIps = new Map();
+    const services = new Map();
+    const ensureSvc = (key) => {
+      if (!services.has(key)) services.set(key, { instanceName: key.replace(/\._ipp\._tcp\.local$/i, ''), port: 631, target: '', txt: {}, ip: '' });
+      return services.get(key);
+    };
+    socket.on('error', finish);
+    socket.on('message', (msg, rinfo) => {
+      try {
+        if (!Buffer.isBuffer(msg) || msg.length < 12) return;
+        const qdCount = msg.readUInt16BE(4);
+        const anCount = msg.readUInt16BE(6);
+        const nsCount = msg.readUInt16BE(8);
+        const arCount = msg.readUInt16BE(10);
+        let offset = 12;
+        for (let i = 0; i < qdCount; i++) {
+          const qn = readDnsName(msg, offset);
+          if (!qn || qn.nextOffset + 4 > msg.length) return;
+          offset = qn.nextOffset + 4;
+        }
+        const totalRr = anCount + nsCount + arCount;
+        for (let i = 0; i < totalRr; i++) {
+          const rrName = readDnsName(msg, offset);
+          if (!rrName || rrName.nextOffset + 10 > msg.length) break;
+          offset = rrName.nextOffset;
+          const type = msg.readUInt16BE(offset);
+          const rdLen = msg.readUInt16BE(offset + 8);
+          offset += 10;
+          if (offset + rdLen > msg.length) break;
+          const nameLower = rrName.name.toLowerCase();
+          if (type === 12 && nameLower === '_ipp._tcp.local') {
+            const ptr = readDnsName(msg, offset);
+            if (ptr && ptr.name) {
+              const svc = ensureSvc(ptr.name.toLowerCase());
+              svc.instanceName = ptr.name.replace(/\._ipp\._tcp\.local$/i, '');
+              if (!svc.ip && isValidIpv4(rinfo.address)) svc.ip = rinfo.address;
+            }
+          } else if (type === 33 && nameLower.endsWith('._ipp._tcp.local')) {
+            if (rdLen >= 7) {
+              const svc = ensureSvc(nameLower);
+              svc.port = msg.readUInt16BE(offset + 4) || 631;
+              const target = readDnsName(msg, offset + 6);
+              if (target && target.name) svc.target = target.name.toLowerCase();
+              if (!svc.ip && isValidIpv4(rinfo.address)) svc.ip = rinfo.address;
+            }
+          } else if (type === 16 && nameLower.endsWith('._ipp._tcp.local')) {
+            const svc = ensureSvc(nameLower);
+            Object.assign(svc.txt, parseDnsTxt(msg, offset, rdLen));
+            if (!svc.ip && isValidIpv4(rinfo.address)) svc.ip = rinfo.address;
+          } else if (type === 1 && rdLen === 4) {
+            const ip = `${msg[offset]}.${msg[offset + 1]}.${msg[offset + 2]}.${msg[offset + 3]}`;
+            if (isValidIpv4(ip)) hostIps.set(nameLower, ip);
+          }
+          offset += rdLen;
+        }
+        for (const [k, svc] of services.entries()) {
+          if (svc.target && hostIps.has(svc.target)) svc.ip = hostIps.get(svc.target);
+          if (svc.ip) results.set(svc.ip + ':' + svc.port, svc);
+        }
+      } catch (e) {}
+    });
+    const query = Buffer.from([
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x04, 0x5f, 0x69, 0x70, 0x70,
+      0x04, 0x5f, 0x74, 0x63, 0x70,
+      0x05, 0x6c, 0x6f, 0x63, 0x61, 0x6c,
+      0x00,
+      0x00, 0x0c, 0x00, 0x01
+    ]);
+    socket.bind(0, () => {
+      try { socket.send(query, 0, query.length, 5353, '224.0.0.251'); }
+      catch (e) { finish(); }
+    });
+    timer = setTimeout(finish, timeoutMs);
+  });
+}
+
+function matchesInstalledPrinterName(discoveredName, installedNames) {
+  const clean = String(discoveredName || '').trim().toLowerCase();
+  if (!clean) return false;
+  if (clean.length >= 5 && (installedNames || []).some(existing => existing.includes(clean) || clean.includes(existing))) {
+    return true;
+  }
+  const tokens = clean.split(/[^a-z0-9]+/).filter(t => t.length >= 2 && !/^\d+$/.test(t));
+  const digits = clean.split(/\D+/).filter(d => d.length >= 2).map(Number);
+  if (!tokens.length || !digits.length) return false;
+  for (const existing of (installedNames || [])) {
+    let tokenHits = 0;
+    for (const t of tokens) {
+      if (existing.includes(t)) tokenHits++;
+    }
+    if (tokenHits < Math.min(2, tokens.length)) continue;
+    const rangeRe = /(\d{2,4})\s*-\s*(\d{2,4})/g;
+    let m;
+    while ((m = rangeRe.exec(existing))) {
+      const lo = Number(m[1]), hi = Number(m[2]);
+      if (digits.some(num => num >= lo && num <= hi)) return true;
+    }
+  }
+  return false;
+}
+
+async function discoverDirectPrintersWin() {
+  const gateways = collectGatewayCandidates();
+  const [installedPrinters, mdnsItems, probeHits] = await Promise.all([
+    getPrintersWin().catch(() => []),
+    discoverMdnsIpp(900).catch(() => []),
+    Promise.all(gateways.map(async (ip) => {
+      const [hasIpp, hasRaw] = await Promise.all([probeTcpPort(ip, 631, 750), probeTcpPort(ip, 9100, 750)]);
+      return (hasIpp || hasRaw) ? { ip, hasIpp, hasRaw } : null;
+    }))
+  ]);
+  const installedIps = await getInstalledPrinterHostIps(installedPrinters);
+  const installedNamesLower = installedPrinters.map(p => p.name.toLowerCase());
+  const byIp = new Map();
+
+  for (const hit of probeHits) {
+    if (!hit) continue;
+    byIp.set(hit.ip, { ip: hit.ip, port: hit.hasIpp ? 631 : 9100, hasIpp: hit.hasIpp, hasRaw: hit.hasRaw, rp: '/ipp/print', name: '' });
+  }
+  for (const item of mdnsItems) {
+    if (!item || !isValidIpv4(item.ip)) continue;
+    const prev = byIp.get(item.ip);
+    if (prev) {
+      prev.hasIpp = true;
+      prev.port = item.port || prev.port || 631;
+      prev.rp = item.rp || prev.rp;
+      if (item.name) prev.name = item.name;
+    } else {
+      byIp.set(item.ip, { ip: item.ip, port: item.port || 631, hasIpp: true, hasRaw: false, rp: item.rp || '/ipp/print', name: item.name || '' });
+    }
+  }
+
+  const found = await Promise.all([...byIp.values()].map(async (entry) => {
+    let protocol = entry.hasIpp ? 'ipp' : 'tcp';
+    let name = entry.name || '';
+    let ippUrl = '';
+    if (entry.hasIpp) {
+      const ippInfo = await queryIppPrinter(entry.ip, entry.port || 631, entry.rp || '/ipp/print');
+      if (ippInfo.ok) {
+        ippUrl = ippInfo.ippUrl;
+        if (ippInfo.name) name = ippInfo.name;
+      } else if (!entry.hasRaw) {
+        ippUrl = `http://${entry.ip}:${entry.port || 631}${entry.rp || '/ipp/print'}`;
+      } else {
+        protocol = 'tcp';
+      }
+    }
+    const cleanName = String(name || '').replace(/[\r\n\t"]/g, ' ').trim();
+    const displayName = cleanName || `直连打印机 (${entry.ip})`;
+    const alreadyInstalled = installedIps.has(entry.ip) || matchesInstalledPrinterName(cleanName, installedNamesLower);
+    return {
+      ip: entry.ip,
+      port: protocol === 'ipp' ? (entry.port || 631) : 9100,
+      protocol,
+      name: displayName,
+      ippUrl,
+      alreadyInstalled
+    };
+  }));
+
+  found.sort((a, b) => Number(a.alreadyInstalled) - Number(b.alreadyInstalled) || (a.protocol === 'ipp' ? -1 : 1) - (b.protocol === 'ipp' ? -1 : 1));
+  return found;
+}
+
+const PS_ADD_PRINTER_SCRIPT = [
+  'param(',
+  '  [Parameter(Mandatory=$true)][string]$Ip,',
+  '  [int]$Port = 631,',
+  '  [string]$Protocol = "ipp",',
+  '  [string]$PrinterName = "",',
+  '  [string]$IppUrl = "",',
+  '  [Parameter(Mandatory=$true)][string]$ResultPath',
+  ')',
+  '$utf8 = New-Object System.Text.UTF8Encoding($false)',
+  '[Console]::OutputEncoding = $utf8',
+  '$OutputEncoding = $utf8',
+  '$ErrorActionPreference = "Stop"',
+  'function Write-Result([bool]$ok, [string]$name, [string]$message) {',
+  '  $obj = [PSCustomObject]@{ ok = $ok; name = $name; message = $message }',
+  '  [IO.File]::WriteAllText($ResultPath, ($obj | ConvertTo-Json -Compress), $utf8)',
+  '}',
+  'function Find-VendorDriver([string]$targetName) {',
+  '  $drivers = Get-PrinterDriver | Where-Object { $_.Name -notmatch "IPP Class Driver|Virtual|Print To PDF|Universal Print|XPS|Fax|OneNote" }',
+  '  if (-not $drivers) { return $null }',
+  '  $tokens = @($targetName -split "[^A-Za-z0-9]+" | Where-Object { $_.Length -ge 2 })',
+  '  $digits = @($targetName -split "\\D+" | Where-Object { $_.Length -ge 2 })',
+  '  $best = $null; $bestScore = 0',
+  '  foreach ($drv in $drivers) {',
+  '    $score = 0',
+  '    foreach ($t in $tokens) { if ($drv.Name -imatch [regex]::Escape($t)) { $score += if ($t -match "^\\d+$") { 4 } else { 2 } } }',
+  '    foreach ($d in $digits) {',
+  '      $num = [int]$d',
+  '      foreach ($m in [regex]::Matches($drv.Name, "(\\d{2,4})\\s*-\\s*(\\d{2,4})")) {',
+  '        $lo = [int]$m.Groups[1].Value; $hi = [int]$m.Groups[2].Value',
+  '        if ($num -ge $lo -and $num -le $hi) { $score += 5 }',
+  '      }',
+  '    }',
+  '    if ($score -gt $bestScore) { $bestScore = $score; $best = $drv.Name }',
+  '  }',
+  '  if ($bestScore -ge 4) { return $best }',
+  '  return $null',
+  '}',
+  'try {',
+  '  $before = @(Get-Printer | ForEach-Object { $_.Name })',
+  '  $lastErr = ""',
+  '  if ($Protocol -eq "ipp" -and $IppUrl -ne "") {',
+  '    $urls = @($IppUrl)',
+  '    if ($IppUrl -match "/ipp/print$") { $urls += ("http://" + $Ip + ":" + $Port + "/") }',
+  '    foreach ($u in $urls) {',
+  '      try {',
+  '        Add-Printer -IppURL $u -ErrorAction Stop',
+  '        $after = @(Get-Printer)',
+  '        $added = $after | Where-Object { $before -notcontains $_.Name } | Select-Object -First 1',
+  '        if (-not $added) { $added = $after | Where-Object { $_.PortName -like ("*" + $Ip + "*") } | Select-Object -First 1 }',
+  '        $finalName = if ($added) { $added.Name } else { $PrinterName }',
+  '        Write-Result $true $finalName "OK"',
+  '        exit 0',
+  '      } catch { $lastErr = $_.Exception.Message }',
+  '    }',
+  '  }',
+  '  $driverName = Find-VendorDriver $PrinterName',
+  '  if (-not $driverName) {',
+  '    $hint = if ($lastErr) { "Windows IPP 添加失败：" + $lastErr + "。" } else { "" }',
+  '    Write-Result $false "" ($hint + "未找到匹配的本地厂商驱动，请点击「系统打印机」在 Windows 设置中添加。")',
+  '    exit 1',
+  '  }',
+  '  $portName = "IP_" + $Ip',
+  '  if (-not (Get-PrinterPort -Name $portName -ErrorAction SilentlyContinue)) {',
+  '    Add-PrinterPort -Name $portName -PrinterHostAddress $Ip -PortNumber $Port -ErrorAction Stop',
+  '  }',
+  '  $baseName = if ($PrinterName) { $PrinterName } else { "直连打印机 (" + $Ip + ")" }',
+  '  $finalName = $baseName',
+  '  $idx = 2',
+  '  while ($before -contains $finalName) { $finalName = $baseName + " (" + $idx + ")"; $idx++ }',
+  '  Add-Printer -Name $finalName -DriverName $driverName -PortName $portName -ErrorAction Stop',
+  '  Write-Result $true $finalName "OK"',
+  '  exit 0',
+  '} catch {',
+  '  Write-Result $false "" $_.Exception.Message',
+  '  exit 1',
+  '}'
+].join('\r\n');
+
+let _psAddPrinterScriptPath = null;
+function psAddPrinterScriptPath() {
+  if (_psAddPrinterScriptPath && fs.existsSync(_psAddPrinterScriptPath)) return _psAddPrinterScriptPath;
+  const dir = path.join(os.tmpdir(), 'uprint-engine');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  const p = path.join(dir, 'add-direct-printer.ps1');
+  fs.writeFileSync(p, '\ufeff' + PS_ADD_PRINTER_SCRIPT, 'utf8');
+  _psAddPrinterScriptPath = p;
+  return p;
+}
+
+function validateDirectPrinterInput(target) {
+  if (!target || typeof target !== 'object') throw new Error('打印机参数无效');
+  const ip = String(target.ip || '').trim();
+  if (!isValidIpv4(ip)) throw new Error('打印机 IP 地址无效');
+  const port = parseInt(target.port, 10) || 631;
+  if (port < 1 || port > 65535) throw new Error('打印机端口无效');
+  const protocol = target.protocol === 'tcp' ? 'tcp' : 'ipp';
+  const name = String(target.name || '').replace(/[\r\n\t"'`$]/g, ' ').trim().slice(0, 80);
+  let ippUrl = '';
+  if (protocol === 'ipp' && target.ippUrl) {
+    try {
+      const parsed = new URL(String(target.ippUrl));
+      if (parsed.protocol === 'http:' && parsed.hostname === ip && (parsed.port ? Number(parsed.port) === port : port === 80)) {
+        const cleanPath = parsed.pathname && /^\/[A-Za-z0-9._\-\/]*$/.test(parsed.pathname) ? parsed.pathname : '/ipp/print';
+        ippUrl = `http://${ip}:${port}${cleanPath}`;
+      }
+    } catch (e) {}
+  }
+  return { ip, port, protocol, name, ippUrl };
+}
+
+async function addDirectPrinterWin(target) {
+  let clean;
+  try {
+    clean = validateDirectPrinterInput(target);
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+  const scriptPath = psAddPrinterScriptPath();
+  const dir = path.join(os.tmpdir(), 'uprint-engine');
+  const resultPath = path.join(dir, 'add-result-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.json');
+  const psQuote = (v) => "'" + String(v).replace(/'/g, "''") + "'";
+  const psWrapper = [
+    "$ErrorActionPreference = 'Stop'",
+    "$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+    "$script = " + psQuote(scriptPath),
+    "$result = " + psQuote(resultPath),
+    "$argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script, '-Ip', " + psQuote(clean.ip) + ", '-Port', '" + clean.port + "', '-Protocol', " + psQuote(clean.protocol) + ", '-PrinterName', " + psQuote(clean.name) + ", '-IppUrl', " + psQuote(clean.ippUrl) + ", '-ResultPath', $result)",
+    "if ($isAdmin) {",
+    "  & $script -Ip " + psQuote(clean.ip) + " -Port " + clean.port + " -Protocol " + psQuote(clean.protocol) + " -PrinterName " + psQuote(clean.name) + " -IppUrl " + psQuote(clean.ippUrl) + " -ResultPath $result",
+    "} else {",
+    "  try {",
+    "    $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $argList",
+    "    if (-not (Test-Path -LiteralPath $result)) { Write-Output ('ERR:exit-' + $p.ExitCode) }",
+    "  } catch {",
+    "    if ($_.Exception.Message -match '1223|cancel|取消') { Write-Output 'CANCELED' } else { Write-Output ('ERR:' + $_.Exception.Message) }",
+    "  }",
+    "}"
+  ].join('; ');
+
+  try {
+    const r = await runPs(psWrapper, { timeout: 60000 });
+    const out = (r.stdout || '').trim();
+    if (fs.existsSync(resultPath)) {
+      const parsed = JSON.parse(fs.readFileSync(resultPath, 'utf8').replace(/^\uFEFF/, ''));
+      return { ok: !!parsed.ok, name: parsed.name || '', message: parsed.message || '' };
+    }
+    if (out.indexOf('CANCELED') >= 0 || /1223|cancel|取消/i.test(r.stderr || '')) {
+      return { ok: false, canceled: true, message: '已取消管理员授权，也可以点击「系统打印机」在系统设置中手动添加。' };
+    }
+    return { ok: false, message: (out.replace(/^ERR:/, '') || (r.stderr || '').trim() || '添加打印机未成功，请点击「系统打印机」手动添加。').slice(0, 200) };
+  } catch (e) {
+    return { ok: false, message: String(e && e.message || '添加打印机失败') };
+  } finally {
+    try { if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath); } catch (e) {}
+  }
+}
+
+function openSystemPrintersWin() {
+  if (electronShell && typeof electronShell.openExternal === 'function') {
+    return electronShell.openExternal('ms-settings:printers').then(() => true).catch(() =>
+      runPs("Start-Process 'ms-settings:printers'", { timeout: 10000 }).then(r => r.code === 0)
+    );
+  }
+  return runPs("Start-Process 'ms-settings:printers'", { timeout: 10000 }).then(r => r.code === 0);
 }
 
 /* ------------------------- 图片静默打印（PowerShell） ------------------------- */
@@ -180,29 +802,51 @@ const PS_IMAGE_SCRIPT = [
   '  [double]$MarginRight = 0,',
   '  [double]$PageWidthMm = 210,',
   '  [double]$PageHeightMm = 297,',
-  '  [double]$ScalePct = 100',
+  '  [double]$ScalePct = 100,',
+  '  [string]$DocTitle = ""',
   ')',
   '$utf8 = New-Object System.Text.UTF8Encoding($false)',
   '[Console]::OutputEncoding = $utf8',
   '$OutputEncoding = $utf8',
   'Add-Type -AssemblyName System.Drawing',
   '$ErrorActionPreference = "Stop"',
+  '$img = $null',
+  '$script:matchedPaper = $null',
   'try {',
   '  if (-not (Test-Path -LiteralPath $ImagePath)) { Write-Output "ERROR: image-not-found"; exit 2 }',
   '  $img = [System.Drawing.Image]::FromFile($ImagePath)',
+  '  try {',
+  '    if ([Array]::IndexOf($img.PropertyIdList, 274) -ge 0) {',
+  '      $orient = [int][System.BitConverter]::ToUInt16($img.GetPropertyItem(274).Value, 0)',
+  '      switch ($orient) {',
+  '        2 { $img.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX) }',
+  '        3 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }',
+  '        4 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipX) }',
+  '        5 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipX) }',
+  '        6 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }',
+  '        7 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipX) }',
+  '        8 { $img.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }',
+  '      }',
+  '    }',
+  '  } catch {}',
   '  $doc = New-Object System.Drawing.Printing.PrintDocument',
+  '  $doc.DocumentName = if ($DocTitle -ne "") { $DocTitle } else { [System.IO.Path]::GetFileName($ImagePath) }',
   '  if ($PrinterName -ne "") { $doc.PrinterSettings.PrinterName = $PrinterName }',
   '  if (-not $doc.PrinterSettings.IsValid) { Write-Output ("ERROR: invalid-printer:" + $doc.PrinterSettings.PrinterName); exit 3 }',
-  '  $doc.PrinterSettings.Copies = [short]1',
+  '  $doc.PrinterSettings.Copies = [int16]1',
   '  # 选择纸张：按纵向尺寸匹配打印机支持的纸张',
   '  $wMm = [Math]::Min($PageWidthMm, $PageHeightMm)',
   '  $hMm = [Math]::Max($PageWidthMm, $PageHeightMm)',
   '  foreach ($psize in $doc.PrinterSettings.PaperSizes) {',
   '    $pw = [Math]::Round($psize.Width / 100.0 * 25.4, 0)',
   '    $ph = [Math]::Round($psize.Height / 100.0 * 25.4, 0)',
-  '    if ([Math]::Abs($pw - $wMm) -le 3 -and [Math]::Abs($ph - $hMm) -le 3) { $doc.DefaultPageSettings.PaperSize = $psize; break }',
+  '    if ([Math]::Abs($pw - $wMm) -le 3 -and [Math]::Abs($ph - $hMm) -le 3) { $script:matchedPaper = $psize; break }',
   '  }',
+  '  if ($script:matchedPaper -eq $null) { $script:matchedPaper = New-Object System.Drawing.Printing.PaperSize("uPrint", [int][Math]::Round($wMm / 25.4 * 100), [int][Math]::Round($hMm / 25.4 * 100)) }',
+  '  $doc.DefaultPageSettings.PaperSize = $script:matchedPaper',
   '  $doc.DefaultPageSettings.Landscape = ($Orientation -eq "landscape")',
+  '  # 部分主机驱动（如 HP Laser MFP 131）只认逐页设置，这里每页再强制一次纸张和方向',
+  '  $doc.add_QueryPageSettings({ param($sender, $qe) $qe.PageSettings.PaperSize = $script:matchedPaper; $qe.PageSettings.Landscape = ($Orientation -eq "landscape") })',
   '  $doc.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins([int]($MarginLeft * 3.937), [int]($MarginRight * 3.937), [int]($MarginTop * 3.937), [int]($MarginBottom * 3.937))',
   '  $script:count = 0',
   '  $script:total = [Math]::Max(1, $Copies)',
@@ -216,17 +860,23 @@ const PS_IMAGE_SCRIPT = [
   '    # Graphics 原点在可打印区域左上角，而 MarginBounds 以纸张边缘为基准，需扣除硬边距才能真正居中',
   '    $dx = $b.Left + ($b.Width - $dw) / 2.0 - $e.PageSettings.HardMarginX; $dy = $b.Top + ($b.Height - $dh) / 2.0 - $e.PageSettings.HardMarginY',
   '    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic',
+  '    try {',
+  '      $logDir = Join-Path $env:TEMP "uprint-engine"; if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }',
+  '      $line = ("{0:yyyy-MM-dd HH:mm:ss} printer={1} req={2}x{3}mm {4} matched={5} pagePaper={6} {7}x{8} landscape={9} pageBounds={10} marginBounds={11} hard={12},{13} clip={14} img={15}x{16} draw={17:N1},{18:N1},{19:N1},{20:N1} scale={21}" -f (Get-Date), $doc.PrinterSettings.PrinterName, $PageWidthMm, $PageHeightMm, $Orientation, $script:matchedPaper.PaperName, $e.PageSettings.PaperSize.PaperName, $e.PageSettings.PaperSize.Width, $e.PageSettings.PaperSize.Height, $e.PageSettings.Landscape, $e.PageBounds, $b, $e.PageSettings.HardMarginX, $e.PageSettings.HardMarginY, $g.VisibleClipBounds, $img.Width, $img.Height, $dx, $dy, $dw, $dh, $ScalePct)',
+  '      [System.IO.File]::AppendAllText((Join-Path $logDir "image-print.log"), $line + [Environment]::NewLine, $utf8)',
+  '    } catch {}',
   '    $g.DrawImage($img, [float]$dx, [float]$dy, [float]$dw, [float]$dh)',
   '    $script:count++',
   '    $e.HasMorePages = ($script:count -lt $script:total)',
   '  }',
   '  $doc.add_PrintPage($handler)',
   '  $doc.Print()',
-  '  $img.Dispose()',
   '  Write-Output "OK"',
   '} catch {',
   '  Write-Output ("ERROR: " + $_.Exception.Message)',
   '  exit 1',
+  '} finally {',
+  '  if ($img -ne $null) { try { $img.Dispose() } catch {} }',
   '}'
 ].join('\r\n');
 
@@ -242,7 +892,24 @@ function psScriptPath() {
   return p;
 }
 
-function printImageWin(filePath, opt) {
+function needsCanvasRaster(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const head = Buffer.alloc(16);
+    const read = fs.readSync(fd, head, 0, 16, 0);
+    fs.closeSync(fd);
+    if (read >= 12) {
+      if (head.subarray(0, 4).toString('ascii') === 'RIFF' && head.subarray(8, 12).toString('ascii') === 'WEBP') return true;
+      if (head.subarray(4, 8).toString('ascii') === 'ftyp') return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function printImageWin(filePath, opt, skipMagicCheck = false) {
+  if (!skipMagicCheck && needsCanvasRaster(filePath)) {
+    return Promise.resolve({ ok: false, engine: 'ps-image', reason: 'need-canvas-raster:unsupported-gdi-format' });
+  }
   const paper = opt.paperSize ? PAPER_SIZES[opt.paperSize] : null;
   let pw = paper ? paper.width : 210;
   let ph = paper ? paper.height : 297;
@@ -260,14 +927,44 @@ function printImageWin(filePath, opt) {
     '-MarginRight', String(Number(m.right) || 0),
     '-PageWidthMm', String(pw),
     '-PageHeightMm', String(ph),
-    '-ScalePct', String(Math.max(10, Math.min(300, Number(opt.scaleFactor) || 100)))
+    '-ScalePct', String(Math.max(10, Math.min(300, Number(opt.scaleFactor) || 100))),
+    '-DocTitle', String((opt && opt.docTitle) || '')
   ];
   return runPs(args, { timeout: 120000 }).then((r) => {
     const out = (r.stdout || '').trim();
     if (r.code === 0 && /^OK/.test(out)) return { ok: true, engine: 'ps-image' };
     const errLine = out.split(/\r?\n/).find(l => l.indexOf('ERROR') === 0) || (r.stderr || '').trim();
+    if (r.code !== 3 && /内存不足|Out of memory|Parameter is not valid|参数无效|GDI\+|FromFile/i.test(errLine)) {
+      return { ok: false, engine: 'ps-image', reason: 'need-canvas-raster:' + errLine.slice(0, 120) };
+    }
     return { ok: false, engine: 'ps-image', reason: 'ps-image-fail:' + (errLine || ('exit-' + r.code)).slice(0, 160) };
   });
+}
+
+async function printImagePng(dataUrl, opt, docTitle = '') {
+  if (!IS_WIN) return { ok: false, engine: 'ps-image-raster', reason: '仅支持 Windows' };
+  const prefix = 'data:image/png;base64,';
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith(prefix)) {
+    return { ok: false, engine: 'ps-image-raster', reason: '无效的 PNG 图像数据' };
+  }
+  const b64 = dataUrl.slice(prefix.length);
+  if (!b64 || b64.length > 90 * 1024 * 1024) {
+    return { ok: false, engine: 'ps-image-raster', reason: 'PNG 图像数据超出限制' };
+  }
+  const buf = Buffer.from(b64, 'base64');
+  if (!buf.length || buf.length > 64 * 1024 * 1024) {
+    return { ok: false, engine: 'ps-image-raster', reason: 'PNG 图像体积异常' };
+  }
+  const dir = path.join(os.tmpdir(), 'uprint-engine');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  const tmpPath = path.join(dir, 'img-print-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.png');
+  fs.writeFileSync(tmpPath, buf);
+  try {
+    const res = await printImageWin(tmpPath, Object.assign({}, opt || {}, { docTitle: String(docTitle || '') }), true);
+    return Object.assign({}, res, { engine: res.ok ? 'ps-image-raster' : res.engine });
+  } finally {
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) {}
+  }
 }
 
 /* ------------------------- PDF 原生打印（Windows.Data.Pdf） ------------------------- */
@@ -685,8 +1382,8 @@ async function printFiles(files, opt, onProgress) {
       if (IS_WIN) {
         r = await printImageWin(f, opt);
       }
-      if (!r.ok) {
-        // 静默失败（如 webp 不被 GDI+ 支持）交给渲染层浏览器对话框兜底
+      if (!r.ok && !(r.reason && r.reason.indexOf('need-canvas-raster') === 0)) {
+        // 其他静默失败交给渲染层浏览器对话框兜底
         r = { ok: false, engine: 'browser', reason: 'use-browser-print' + (r.reason ? ':' + r.reason : '') };
       }
     }
@@ -727,7 +1424,11 @@ window.uPrint = {
   paperSizes: PAPER_SIZES,
   detectEnv,
   getPrinters: IS_WIN ? getPrintersWin : () => Promise.resolve([]),
+  discoverDirectPrinters: IS_WIN ? discoverDirectPrintersWin : () => Promise.resolve([]),
+  addDirectPrinter: IS_WIN ? addDirectPrinterWin : () => Promise.resolve({ ok: false, message: '仅支持 Windows' }),
+  openSystemPrinters: IS_WIN ? openSystemPrintersWin : () => Promise.resolve(false),
   printFiles,
+  printImagePng,
   renderPdfPreview,
   prepareDocxPreview,
   removePreviewFile,

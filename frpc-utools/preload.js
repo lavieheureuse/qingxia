@@ -45,12 +45,23 @@
     const { createService } = require('./core/service.cjs');
     // 注意：不能用这里的全局 fetch。uTools preload 跑在渲染进程里，全局 fetch 会受
     // 插件页面 CSP（connect-src 'none'）限制，真机上直接 Failed to fetch。
+    const fs = require('node:fs');
     const { nodeFetch } = require('./core/node-fetch.cjs');
-    const dataDir = path.join(hostPath('userData', path.join(os.homedir(), '.config')), 'frpc-utools');
+    const dataRoot = hostPath('pluginData', hostPath('userData', path.join(os.homedir(), '.config')));
+    const dataDir = path.join(dataRoot, 'frpc-utools');
+    const binDir = path.join(dataDir, 'bin');
+    const legacyExe = path.join(__dirname, 'bin', 'frpc.exe');
+    const targetExe = path.join(binDir, 'frpc.exe');
+    try {
+      if (fs.existsSync(legacyExe) && !fs.existsSync(targetExe)) {
+        fs.mkdirSync(binDir, { recursive: true });
+        fs.copyFileSync(legacyExe, targetExe);
+      }
+    } catch (_) { /* 兼容迁移失败时忽略 */ }
     service = createService({
       dataDir,
-      binDir: path.join(__dirname, 'bin'),
-      runDir: path.join(__dirname, 'run'),
+      binDir,
+      runDir: path.join(dataDir, 'run'),
       caPath: path.join(__dirname, 'core', 'frp-ca.pem'),
       host,
       appVersion,

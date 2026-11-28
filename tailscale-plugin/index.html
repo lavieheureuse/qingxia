@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light">
+  <title>Tailscale 异地组网</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.6-4M20 4v5h-5M4 13a8 8 0 0 0 14.6 4M4 20v-5h5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 5.5V4a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h1.5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L11 13M10 4H4v16h16v-6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4.5-4.5L12 15l4.5-4.5M4 16v4h16v-4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5h6l2 3h10v12H3V7Z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3v1"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.8-2.9 7.8-7 9.5-4.1-1.7-7-4.7-7-9.5V6l7-3Z"/><path d="m9 12 2.2 2.2L15.5 10"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M16 17l5-5-5-5M21 12H9"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+  </defs></svg>
+
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <img class="brand-logo" src="logo.png" alt="">
+        <div class="brand-text">
+          <h1>Tailscale 异地组网</h1>
+          <p>Wintun 虚拟网卡模式 · 100.x.y.z 虚拟局域网直连</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span id="kernel-chip" class="chip chip-muted">内核未就绪</span>
+        <span id="phase-badge" class="phase-badge is-stopped" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="phase-badge-text">未运行</span>
+        </span>
+      </div>
+    </header>
+
+    <div id="toast-bar" class="notice" role="status" aria-live="polite" hidden></div>
+    <div id="host-warning" class="notice notice-warn" role="note" hidden></div>
+
+    <main id="main">
+      <!-- 状态总览 -->
+      <section class="surface status-card" aria-labelledby="status-heading">
+        <div class="status-head">
+          <div class="status-main">
+            <span id="status-indicator" class="status-indicator is-stopped" aria-hidden="true"></span>
+            <div class="status-text">
+              <div class="status-title-row">
+                <h2 id="status-heading" class="status-title">未运行</h2>
+                <span id="tun-chip" class="chip chip-muted">Wintun 虚拟网卡</span>
+                <span id="pid-chip" class="chip chip-muted" hidden></span>
+              </div>
+              <p id="status-subtitle" class="status-subtitle">点击“启动连接”将以管理员权限拉起独立 tailscaled 虚拟网卡。</p>
+            </div>
+          </div>
+          <div class="status-actions">
+            <button id="toggle-btn" class="button button-primary" type="button">
+              <svg class="icon" aria-hidden="true"><use id="toggle-icon" href="#i-play"/></svg>
+              <span id="toggle-label">启动连接</span>
+            </button>
+            <button id="refresh-btn" class="button button-secondary" type="button" title="刷新状态">
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>
+              <span>刷新</span>
+            </button>
+            <button id="logout-btn" class="button button-secondary" type="button" title="注销当前节点账号">
+              <svg class="icon" aria-hidden="true"><use href="#i-logout"/></svg>
+              <span>注销</span>
+            </button>
+          </div>
+        </div>
+
+        <dl class="status-facts">
+          <div class="fact-block">
+            <dt>本机 Tailscale IP</dt>
+            <dd class="fact-ip-row">
+              <span id="self-ip" class="mono">—</span>
+              <button id="copy-self-ip" class="icon-button" type="button" title="复制本机 100.x IP" hidden>
+                <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>
+              </button>
+            </dd>
+            <span id="self-ip-sub" class="fact-sub">虚拟网卡地址，可用于远程桌面、SSH、文件共享等内网直连</span>
+          </div>
+          <div class="fact-block">
+            <dt>本机节点名称</dt>
+            <dd id="self-name">—</dd>
+            <span id="self-dns" class="fact-sub">尚未接入 Tailnet</span>
+          </div>
+          <div class="fact-block">
+            <dt>独立运行环境</dt>
+            <dd id="tun-mode-text">未启动</dd>
+            <span id="socket-sub" class="fact-sub mono">独立命名管道 · 不污染原版配置</span>
+          </div>
+        </dl>
+
+        <div class="quick-toggles">
+          <label class="switch-field">
+            <input id="auto-connect" type="checkbox">
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="switch-text">插件启动时自动连接（配合轻匣“后台运行”与“随轻匣启动”使用）</span>
+          </label>
+        </div>
+
+        <p id="status-error" class="status-error" role="alert" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+          <span id="status-error-text"></span>
+        </p>
+      </section>
+
+      <!-- 授权登录卡片 -->
+      <section id="auth-card" class="surface auth-card" hidden aria-labelledby="auth-heading">
+        <div class="auth-head">
+          <div>
+            <h2 id="auth-heading">等待浏览器登录授权</h2>
+            <p class="auth-desc">请在浏览器打开下方授权链接完成 Tailscale 账号登录；授权完成后状态将自动更新。</p>
+          </div>
+          <div class="auth-actions">
+            <button id="open-auth-btn" class="button button-primary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-external"/></svg>
+              <span>打开浏览器授权</span>
+            </button>
+            <button id="copy-auth-btn" class="button button-secondary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>
+              <span>复制链接</span>
+            </button>
+          </div>
+        </div>
+        <div class="auth-url-box mono" id="auth-url-text"></div>
+      </section>
+
+      <!-- 异常排查与环境提示 -->
+      <section id="diagnostics-list" class="diagnostics-list" hidden aria-label="环境诊断提示"></section>
+
+      <!-- 设备节点列表 -->
+      <section class="surface panel-card" aria-labelledby="peers-heading">
+        <div class="panel-head">
+          <div>
+            <h2 id="peers-heading">账号下设备节点</h2>
+            <p id="peers-summary" class="panel-sub">启动并登录后可查看账号下各设备的链路状态（Direct 直连 / DERP 中继）。</p>
+          </div>
+          <div class="peers-filter">
+            <button id="filter-all" class="filter-tab active" type="button">全部</button>
+            <button id="filter-online" class="filter-tab" type="button">仅在线</button>
+          </div>
+        </div>
+        <div id="ping-result" class="ping-banner" hidden></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>设备节点</th>
+                <th>Tailscale IP（点击复制）</th>
+                <th>链路方式</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="peers-tbody"></tbody>
+          </table>
+          <p id="peers-empty" class="empty">暂无设备信息。</p>
+        </div>
+      </section>
+
+      <!-- 内核管理 -->
+      <details id="kernel-panel" class="surface settings-panel">
+        <summary class="panel-summary">
+          <span class="summary-icon"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg></span>
+          <span class="summary-text">
+            <span class="summary-title">内核管理（tailscaled.exe / tailscale.exe / wintun.dll）</span>
+            <span id="kernel-summary" class="summary-meta">检查中…</span>
+          </span>
+          <span id="kernel-flag" class="chip chip-warn" hidden>未就绪</span>
+          <svg class="icon summary-chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="panel-body">
+          <div class="kernel-info-grid">
+            <div><span class="label-muted">当前目录</span><p id="kernel-dir" class="mono path-text">—</p></div>
+            <div><span class="label-muted">内核版本</span><p id="kernel-ver">—</p></div>
+            <div><span class="label-muted">缺失文件</span><p id="kernel-missing">无</p></div>
+          </div>
+          <div id="download-progress-wrap" class="progress-wrap" hidden>
+            <div class="progress-bar"><div id="download-progress-fill" class="progress-fill"></div></div>
+            <span id="download-progress-text" class="progress-text">准备下载…</span>
+          </div>
+          <div class="btn-row">
+            <button id="download-kernel-btn" class="button button-primary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
+              <span>一键下载官方最新内核（SHA-256 校验）</span>
+            </button>
+            <button id="pick-kernel-btn" class="button button-secondary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
+              <span>手动指定本地目录</span>
+            </button>
+            <button id="open-data-btn" class="button button-secondary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
+              <span>打开插件数据目录</span>
+            </button>
+          </div>
+        </div>
+      </details>
+
+      <!-- 高级连接与 Auth Key 配置 -->
+      <details id="settings-panel" class="surface settings-panel">
+        <summary class="panel-summary">
+          <span class="summary-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span>
+          <span class="summary-text">
+            <span class="summary-title">高级参数与 Auth Key 登录</span>
+            <span id="settings-summary" class="summary-meta">默认参数 · 交互式授权</span>
+          </span>
+          <svg class="icon summary-chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+        </summary>
+        <form id="settings-form" class="panel-body" novalidate>
+          <div class="form-grid">
+            <div class="field field-wide">
+              <label for="auth-key-input">Auth Key（可选，留空则使用浏览器交互登录）</label>
+              <input id="auth-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="tskey-auth-...（不会以明文写入日志或配置）">
+              <div class="inline-check-row">
+                <label class="checkbox-inline"><input id="save-auth-key" type="checkbox"> <span>使用当前 Windows 账户 DPAPI 加密保存此 Auth Key</span></label>
+                <button id="clear-auth-key-btn" class="text-button" type="button" hidden>清除已保存 Key</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="hostname-input">自定义节点名（可选）</label>
+              <input id="hostname-input" type="text" maxlength="63" spellcheck="false" placeholder="留空使用系统电脑名">
+            </div>
+            <div class="field">
+              <label for="udp-port-input">UDP 监听端口（0 = 自动）</label>
+              <input id="udp-port-input" type="number" min="0" max="65535" placeholder="0">
+            </div>
+            <div class="field field-wide">
+              <label for="login-server-input">自定义控制服务器（Headscale，可选）</label>
+              <input id="login-server-input" type="url" spellcheck="false" placeholder="留空使用官方 https://controlplane.tailscale.com">
+            </div>
+          </div>
+          <div class="checkbox-group">
+            <label class="checkbox-inline"><input id="accept-dns" type="checkbox" checked> <span>启用 MagicDNS（accept-dns）</span></label>
+            <label class="checkbox-inline"><input id="no-logs" type="checkbox" checked> <span>禁用遥测日志上传（--no-logs-no-support）</span></label>
+          </div>
+          <div class="btn-row">
+            <button id="save-settings-btn" class="button button-primary" type="submit">保存设置</button>
+          </div>
+        </form>
+      </details>
+
+      <!-- 运行日志与排障 -->
+      <details id="logs-panel" class="surface settings-panel">
+        <summary class="panel-summary">
+          <span class="summary-icon"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg></span>
+          <span class="summary-text">
+            <span class="summary-title">实时运行日志与排障指引</span>
+            <span id="logs-summary" class="summary-meta">敏感凭据已自动脱敏</span>
+          </span>
+          <svg class="icon summary-chevron" aria-hidden="true"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="panel-body">
+          <div class="btn-row btn-row-between">
+            <span class="hint-text">直连排查提示：双方建立 Tailscale 连接后，可点击设备旁的“Ping 探测”触发 UDP 打洞并确认是否为 Direct 直连。</span>
+            <div class="btn-row-compact">
+              <button id="copy-logs-btn" class="button button-secondary" type="button">复制日志</button>
+              <button id="clear-logs-btn" class="button button-secondary" type="button">清空</button>
+            </div>
+          </div>
+          <pre id="logs-output" class="logs-box mono">暂无日志</pre>
+        </div>
+      </details>
+    </main>
+  </div>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirm-title">确认操作</h2>
+      <p id="confirm-message"></p>
+      <div class="dialog-actions">
+        <button class="button button-secondary" value="cancel">取消</button>
+        <button class="button button-danger" value="confirm">确认注销</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

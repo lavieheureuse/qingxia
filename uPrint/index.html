@@ -103,7 +103,15 @@
           <select id="printerSelect" style="width:100%;">
             <option value="">系统默认打印机</option>
           </select>
-          <button class="btn" id="btnRefreshPrinters" style="margin-top:6px; width:100%;">刷新打印机列表</button>
+          <div class="printer-actions">
+            <button class="btn" id="btnRefreshPrinters">刷新打印机列表</button>
+            <button class="btn" id="btnSystemPrinters" title="打开 Windows 打印机和扫描仪设置">系统打印机</button>
+          </div>
+          <div class="direct-printers" id="directPrintersBox" hidden>
+            <div class="direct-printers-head">发现未添加的直连/网络打印机</div>
+            <div class="direct-printers-list" id="directPrintersList"></div>
+          </div>
+          <div class="hint-line" id="printerHint">Wi-Fi Direct 直连需先添加到系统打印机；点刷新会自动探测当前直连打印机。</div>
         </div>
 
         <!-- 份数 -->

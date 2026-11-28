@@ -1,6 +1,6 @@
 {
   "name": "personal-toolbox",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "轻匣工具箱",
   "main": "main.cjs",
   "private": true,
@@ -22,6 +22,7 @@
     "asar": true,
     "files": [
       "main.cjs",
+      "plugin-storage.cjs",
       "preload.cjs",
       "plugin-preload.cjs",
       "index.html",

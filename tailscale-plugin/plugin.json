@@ -1,0 +1,18 @@
+{
+  "id": "com.qingxia.tailscale",
+  "main": "index.html",
+  "preload": "preload.js",
+  "logo": "logo.png",
+  "pluginSetting": {
+    "single": true,
+    "height": 720,
+    "outKill": false
+  },
+  "features": [
+    {
+      "code": "tailscale",
+      "description": "Windows Wintun 虚拟网卡模式 Tailscale 异地组网，支持通过 100.x.y.z 直连互通",
+      "cmds": ["Tailscale 异地组网", "tailscale", "异地组网", "组网", "虚拟局域网"]
+    }
+  ]
+}

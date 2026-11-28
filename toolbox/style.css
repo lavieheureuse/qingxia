@@ -68,5 +68,7 @@ progress.update-progress::-webkit-progress-value{background:#205b35;border-radiu
 .mini-action:hover:not(:disabled){background:#edf5ec}
 .mini-action.copied{background:#edf5ec;border-color:#205b35}
 .status-inline{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:6px;background:#edf5ec;border:1px solid #b6c8b7;color:#205b35;font-size:12px;font-weight:600;vertical-align:1px}
+.dialog-checkbox{display:flex;align-items:flex-start;gap:10px;margin:16px 0 0;padding:12px 14px;border:1px solid #d5dfd3;border-radius:10px;background:#f2f5ef;color:#2c4235;font-size:13.5px;line-height:1.5;cursor:pointer}
+.dialog-checkbox input{width:17px;height:17px;margin-top:2px;accent-color:#205b35;flex:none}
 .setting-repo-url{display:inline-block;margin-top:6px;padding:3px 9px;border-radius:6px;background:#f3f5ef;border:1px solid #dce3da;color:#53665b;font-size:13px;font-family:'Consolas','Segoe UI',monospace;overflow-wrap:anywhere}
 @media (prefers-reduced-motion:reduce){button,progress.update-progress::-webkit-progress-value{transition:none}}

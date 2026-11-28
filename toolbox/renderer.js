@@ -97,16 +97,24 @@ function markCopied(key) {
     render();
   }, 1800);
 }
-async function confirmUpdates(items) { const duplicates = items.filter(alreadyAdded); return !duplicates.length || showDialog({ title: '更新已添加的插件？', message: '以下插件已添加：' + duplicates.map(p => p.name).join('、') + '。更新后会保留面板和运行设置；插件正在运行时请先关闭。', confirmText: '更新并添加', cancelText: '取消' }); }
-function showDialog({ title, message, confirmText = '知道了', cancelText, danger = false }) {
+async function confirmUpdates(items) { const duplicates = items.filter(alreadyAdded); return !duplicates.length || showDialog({ title: '更新已添加的插件？', message: '以下插件已添加：' + duplicates.map(p => p.name).join('、') + '。更新后会保留面板、运行设置与 plugin-data 中的配置和内核；插件正在运行时请先关闭。', confirmText: '更新并添加', cancelText: '取消' }); }
+function showDialog({ title, message, confirmText = '知道了', cancelText, danger = false, checkboxLabel = '', checkboxDefault = false }) {
   return new Promise(resolve => {
     const previous = document.activeElement;
     const dialog = document.createElement('dialog');
     dialog.className = 'app-dialog';
     dialog.setAttribute('aria-labelledby', 'message-title');
     dialog.setAttribute('aria-describedby', 'message-description');
-    dialog.innerHTML = `<div class="dialog-heading"><span class="dialog-eyebrow">轻匣</span><h2 id="message-title">${escapeHtml(title)}</h2></div><p id="message-description" class="dialog-description">${escapeHtml(message)}</p><div class="dialog-actions">${cancelText ? `<button type="button" class="dialog-cancel">${escapeHtml(cancelText)}</button>` : ''}<button type="button" class="dialog-confirm ${danger ? 'danger' : 'primary'}">${escapeHtml(confirmText)}</button></div>`;
-    dialog.addEventListener('close', () => { const accepted = dialog.returnValue === 'confirm'; dialog.remove(); if (previous && previous.isConnected) previous.focus(); resolve(accepted); }, { once: true });
+    const checkboxHtml = checkboxLabel ? `<label class="dialog-checkbox"><input type="checkbox" ${checkboxDefault ? 'checked' : ''}><span>${escapeHtml(checkboxLabel)}</span></label>` : '';
+    dialog.innerHTML = `<div class="dialog-heading"><span class="dialog-eyebrow">轻匣</span><h2 id="message-title">${escapeHtml(title)}</h2></div><p id="message-description" class="dialog-description">${escapeHtml(message)}</p>${checkboxHtml}<div class="dialog-actions">${cancelText ? `<button type="button" class="dialog-cancel">${escapeHtml(cancelText)}</button>` : ''}<button type="button" class="dialog-confirm ${danger ? 'danger' : 'primary'}">${escapeHtml(confirmText)}</button></div>`;
+    dialog.addEventListener('close', () => {
+      const accepted = dialog.returnValue === 'confirm';
+      const cb = dialog.querySelector('.dialog-checkbox input');
+      const checked = cb ? Boolean(cb.checked) : false;
+      dialog.remove();
+      if (previous && previous.isConnected) previous.focus();
+      resolve(checkboxLabel ? { confirmed: accepted, checked } : accepted);
+    }, { once: true });
     dialog.querySelector('.dialog-confirm').addEventListener('click', () => dialog.close('confirm'));
     const cancel = dialog.querySelector('.dialog-cancel');
     if (cancel) cancel.addEventListener('click', () => dialog.close('cancel'));
@@ -211,7 +219,7 @@ function render() {
     const updateSubtext = phase === 'error' && u.error ? u.error : `当前版本 v${state.version}，可直接在应用内查看更新说明并升级。`;
     const hasPendingUpdate = ['available', 'downloading', 'downloaded', 'installing'].includes(phase);
     const primaryUpdateBtn = hasPendingUpdate ? `<button class="primary" data-action="update-open">${phase === 'downloaded' ? '立即重启更新' : '查看更新'}</button>` : '';
-    content = `<h1>设置</h1><div class="setting"><div><strong>鼠标中键呼出超级面板</strong><small>中键可能与其他软件的操作冲突。</small></div><input type="checkbox" data-setting="middle" ${state.middle ? 'checked' : ''}></div><div class="setting"><div><strong>开机自动启动</strong><small>系统启动时自动运行工具箱。</small></div><input type="checkbox" data-setting="autostart" ${state.autoStart ? 'checked' : ''}></div><div class="setting"><div><strong>插件目录</strong><small>${escapeHtml(state.folder)}</small><small>选择位置后自动创建 qingxia-plugin 文件夹；已添加的插件会迁移，旧副本移入回收站。</small></div><div class="setting-actions"><button data-action="folder">查看文件夹</button><button data-action="change-folder">更改目录</button><button data-action="clean-orphans">清理旧副本</button></div></div><div class="setting"><div><strong>启动时自动检查更新</strong><small>打开轻匣时在后台检查 GitHub 新版本，有更新时温和提示。</small></div><input type="checkbox" data-setting="auto-check-update" ${state.autoCheckUpdate ? 'checked' : ''}></div><div class="setting"><div><strong>软件更新${statusBadge}</strong><small>${escapeHtml(updateSubtext)}</small></div><div class="setting-actions">${primaryUpdateBtn}<button data-action="update-check" ${phase === 'checking' || phase === 'downloading' || phase === 'installing' ? 'disabled' : ''}>${phase === 'checking' ? '检查中…' : '检查更新'}</button><button data-action="open-releases">发布页</button></div></div><div class="setting"><div><strong>官方插件仓库</strong><small>加载插件时默认填入此地址，无需前往 GitHub 手动复制。</small><code class="setting-repo-url">${escapeHtml(defaultGithubUrl)}</code></div><div class="setting-actions"><button data-action="settings-copy-repo">${settingsCopied ? '已复制' : '复制地址'}</button><button data-action="open-repo">访问仓库</button></div></div>`;
+    content = `<h1>设置</h1><div class="setting"><div><strong>鼠标中键呼出超级面板</strong><small>中键可能与其他软件的操作冲突。</small></div><input type="checkbox" data-setting="middle" ${state.middle ? 'checked' : ''}></div><div class="setting"><div><strong>开机自动启动</strong><small>系统启动时自动运行工具箱。</small></div><input type="checkbox" data-setting="autostart" ${state.autoStart ? 'checked' : ''}></div><div class="setting"><div><strong>插件目录</strong><small>${escapeHtml(state.folder)}</small><small>选择位置后自动创建 qingxia-plugin 文件夹，统一存放插件副本与 plugin-data 数据；更改目录时一并迁移，旧副本移入回收站。</small></div><div class="setting-actions"><button data-action="folder">查看文件夹</button><button data-action="change-folder">更改目录</button><button data-action="clean-orphans">清理旧副本</button></div></div><div class="setting"><div><strong>启动时自动检查更新</strong><small>打开轻匣时在后台检查 GitHub 新版本，有更新时温和提示。</small></div><input type="checkbox" data-setting="auto-check-update" ${state.autoCheckUpdate ? 'checked' : ''}></div><div class="setting"><div><strong>软件更新${statusBadge}</strong><small>${escapeHtml(updateSubtext)}</small></div><div class="setting-actions">${primaryUpdateBtn}<button data-action="update-check" ${phase === 'checking' || phase === 'downloading' || phase === 'installing' ? 'disabled' : ''}>${phase === 'checking' ? '检查中…' : '检查更新'}</button><button data-action="open-releases">发布页</button></div></div><div class="setting"><div><strong>官方插件仓库</strong><small>加载插件时默认填入此地址，无需前往 GitHub 手动复制。</small><code class="setting-repo-url">${escapeHtml(defaultGithubUrl)}</code></div><div class="setting-actions"><button data-action="settings-copy-repo">${settingsCopied ? '已复制' : '复制地址'}</button><button data-action="open-repo">访问仓库</button></div></div>`;
   }
 
   const hadModal = !!app.querySelector('.overlay');
@@ -263,7 +271,7 @@ async function handle(action, id) {
   if (action === 'settings-copy-repo') { await call('copy-text', state.defaultGithubUrl || DEFAULT_GITHUB_REPO); markCopied('settings'); return; }
   if (action === 'cancel') { candidate = null; await call('github-clear'); }
   if (action === 'add-confirm') { const replace = alreadyAdded(candidate); if (!await confirmUpdates([candidate])) return; state = await call('add', { dir: candidate.dir, replace }); candidate = null; if (state.warning) void showDialog({ title: '更新完成，清理未完成', message: state.warning }); }
-  if (action === 'remove') { const plugin = state.plugins.find(item => item.dir === id); if (!await showDialog({ title: '移除工具？', message: `确定从工具箱移除“${plugin ? plugin.name : '该工具'}”？托管的插件副本将移入回收站，你的用户数据会保留。`, confirmText: '移除工具', cancelText: '取消', danger: true })) return; state = await call('remove', id); if (state.warning) void showDialog({ title: '移除完成，清理未完成', message: state.warning }); }
+  if (action === 'remove') { const plugin = state.plugins.find(item => item.dir === id); const hasData = Boolean(plugin && plugin.dataSubdir); const result = await showDialog({ title: '移除工具？', message: hasData ? `确定从工具箱移除“${plugin.name}”？托管的插件副本将移入回收站。` : `确定从工具箱移除“${plugin ? plugin.name : '该工具'}”？托管的插件副本将移入回收站，你的用户数据会保留。`, checkboxLabel: hasData ? '同时删除该插件的配置、数据与已下载内核（移入回收站，下次导入需重新配置和下载）' : '', checkboxDefault: false, confirmText: '移除工具', cancelText: '取消', danger: true }); const confirmed = hasData ? result.confirmed : result; const removeData = hasData ? result.checked : false; if (!confirmed) return; state = await call('remove', { dir: id, removeData }); if (state.warning) void showDialog({ title: '移除完成，清理未完成', message: state.warning }); }
   if (action === 'save-panel') { state = await call('panel', selected); page = 'home'; }
   if (action === 'folder') await call('folder');
   if (action === 'change-folder') { state = await call('change-folder'); if (state.warning) void showDialog({ title: '迁移完成，清理未完成', message: state.warning }); }
